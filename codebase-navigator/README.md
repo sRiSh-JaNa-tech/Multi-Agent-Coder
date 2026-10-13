@@ -69,3 +69,39 @@ python demo_ui.py
 ```bash
 python test_e2e_tools.py
 ```
+
+---
+
+## Ticket Orchestration System (`orchestrator/`)
+
+An autonomous multi-agent ticket system where the **Main Orchestrator** decomposes objectives into discrete tickets and distributes them across worker agents.
+
+```
+                          +-----------------------------+
+                          |      Main Orchestrator      |
+                          |  Identifies & Raises Tickets|
+                          +--------------+--------------+
+                                         |
+                +------------------------+------------------------+
+                |                        |                        |
+                v                        v                        v
+      +--------------------+   +--------------------+   +--------------------+
+      |  Agent-1 (Analyst) |   |  Agent-2 (Coder)   |   |  Agent-3 (Tester)  |
+      | Queue Limit: 3     |   | Queue Limit: 3     |   | Queue Limit: 3     |
+      | [T1, T2, T3]       |   | [T4, T5, T6]       |   | [T7, T8]           |
+      +---------+----------+   +---------+----------+   +---------+----------+
+                |                        |                        |
+                v                        v                        v
+      Synchronous FIFO         Synchronous FIFO         Synchronous FIFO
+      (Ticket by Ticket)       (Ticket by Ticket)       (Ticket by Ticket)
+```
+
+### Key Rules & Constraints:
+1. **Per-Agent Queue Limit (3)**: Each agent can accept at most 3 tickets in its queue simultaneously. If all queues are full, excess tickets stay in master pending backlog.
+2. **Synchronous Execution**: Agents process their queued tickets strictly **one by one (synchronously)** in FIFO order—never in parallel.
+3. **Dynamic Re-dispatching**: As an agent resolves a ticket, its queue opens up a free slot, and the orchestrator dispatches the next pending backlog ticket.
+
+### Run Ticket Orchestrator:
+```bash
+python 02_ticket_orchestrator.py
+```

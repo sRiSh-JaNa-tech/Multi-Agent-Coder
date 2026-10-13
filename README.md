@@ -79,6 +79,15 @@ Hands-on, self-contained examples demonstrating standard patterns in LLM orchest
 
 ---
 
+
+### 3. Multi-Agent Ticket Orchestration (`02_ticket_orchestrator.py`)
+- **Main Orchestrator**: Identifies problems from user objectives, generates discrete problem tickets, and matches them to specialized agents (`analysis`, `coding`, `testing`).
+- **Strict Queue Limit (3 Tickets)**: Each agent maintains a queue with a hard limit of 3 tickets. Excess tickets remain in master backlog until queue slots open.
+- **Synchronous Processing**: Agents execute tickets **one by one synchronously** in strict FIFO sequence.
+- **Live Visual Dashboard**: Rich terminal table monitoring agent queues, active tickets, and real-time resolution logs.
+
+---
+
 ## Quickstart
 
 ### 1. Prerequisites
