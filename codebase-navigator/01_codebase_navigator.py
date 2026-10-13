@@ -10,9 +10,10 @@ Point it at any GitHub repo, and it will clone, index, and answer questions usin
 semantic search — while maintaining memory across sessions.
 """
 
+import os
+import sys
 import json
 import time
-import os
 from pathlib import Path
 from typing import Any
 from google import genai
@@ -25,11 +26,14 @@ from rich.prompt import Prompt
 
 from common import GeminiTokenTracker, setup_logging
 from common.menu import interactive_menu
+from common.ui import ConsoleUI
 
 # Load environment variables
 load_dotenv(find_dotenv())
 
 logger = setup_logging(__name__)
+
+MODEL = "gemini-2.5-flash-lite"
 
 # Path to the cumulative token usage log
 _TOKEN_CSV = Path(__file__).parent.parent / "logs" / "token_usage.csv"
@@ -41,52 +45,42 @@ SUGGESTED_REPOS = [
     "pallets/flask",
 ]
 
-MODEL = "gemini-2.5-flash-lite"
 
-
-SYSTEM_PROMPT = """You are a Codebase Navigator — an AI assistant that helps software engineers \
-explore and understand codebases.
+SYSTEM_PROMPT = """You are an advanced Codebase Navigator & Coding Agent — an AI assistant that \
+helps software engineers explore, understand, modify, and test codebases.
 
 ## Your Capabilities
 
-You have access to tools for:
-- Cloning and indexing GitHub repositories (clone_and_index)
-- Listing indexed repositories (list_repos)
-- Searching code semantically (search_code)
-- Reading full file contents (read_file)
-- Exploring directory structures (list_directory)
-- Finding exact patterns with regex (grep)
-- Saving memories for future sessions (save_memory)
-- Recalling saved memories (recall_memory)
+### 1. Navigation & Structural Inspection
+- Cloning and indexing repositories: clone_and_index
+- Listing indexed repositories: list_repos
+- Semantic search across code: search_code
+- Outline symbols & classes: get_file_outline
+- Reading full file contents with line numbers: read_file
+- Exploring directory structure: list_directory
+- Finding exact regex patterns: grep
 
-## How to Help Users
+### 2. Code Modification & Implementation
+- Creating new files: create_file
+- Writing/overwriting files: write_file
+- Surgical unique block replacement: replace_file_content
 
-When a user mentions a GitHub repo (like "pallets/flask" or "look at the httpie repo"):
-1. Use clone_and_index to clone and index it first
-2. Then answer their questions using search_code, read_file, etc.
+### 3. Verification & Execution
+- Validating Python/JSON syntax: check_syntax
+- Running terminal commands & tests: run_command
+- Inspecting git diff: git_diff
+- Inspecting git status: git_status
 
-Use search_code for semantic/conceptual questions:
-- "how does authentication work?"
-- "where is the database connection handled?"
+### 4. Memory
+- Saving architectural patterns & preferences: save_memory
+- Recalling stored context: recall_memory
 
-Use grep for exact matches:
-- "find all TODO comments"
-- "where is UserModel defined?"
-
-Use read_file when you need full context after finding relevant chunks.
-
-## Memory
-
-Save important insights to memory, especially:
-- Architectural patterns you discover
-- Key files and their purposes
-- Connections between different repos
-- User preferences for how they like information presented
-
-Check recall_memory at the start of conversations to remember context.
+## Workflow Rules
+- Explore first before editing: use search_code, get_file_outline, or read_file to inspect code context.
+- Keep changes surgical: use replace_file_content whenever possible.
+- Always verify changes: run check_syntax and run_command (tests/linting) after modifying files.
 
 ## Response Style
-
 - Be concise but thorough
 - Show relevant code snippets with file paths and line numbers
 - Explain architectural decisions when you discover them
@@ -98,15 +92,25 @@ Check recall_memory at the start of conversations to remember context.
 
 def _build_tool_definitions() -> list[dict[str, Any]]:
     """Collect all tool definitions from tool modules."""
-    from tools.files import FILE_TOOLS
-    from tools.memory import MEMORY_TOOLS
-    from tools.repo import REPO_TOOLS
-    from tools.search import SEARCH_TOOLS
+    from tools import (
+        FILE_TOOLS,
+        MEMORY_TOOLS,
+        REPO_TOOLS,
+        SEARCH_TOOLS,
+        CODING_TOOLS,
+        EXECUTION_TOOLS,
+        OUTLINE_TOOLS,
+    )
 
-    all_tools = MEMORY_TOOLS + REPO_TOOLS + FILE_TOOLS + SEARCH_TOOLS
-    
-    # Wrap in Gemini's expected tool format if needed, 
-    # but google-genai can take a list of function declarations.
+    all_tools = (
+        MEMORY_TOOLS
+        + REPO_TOOLS
+        + FILE_TOOLS
+        + SEARCH_TOOLS
+        + CODING_TOOLS
+        + EXECUTION_TOOLS
+        + OUTLINE_TOOLS
+    )
     return [{"function_declarations": all_tools}]
 
 
@@ -128,9 +132,28 @@ def ensure_api_key(console: Console | None = None) -> str:
 
     while True:
         try:
-            entered_key = Prompt.ask("[bold green]Enter your GEMINI_API_KEY[/bold green]", password=True).strip()
+            if sys.stdin.isatty():
+                entered_key = Prompt.ask("[bold green]Enter your GEMINI_API_KEY[/bold green]", password=True).strip()
+            else:
+                _console.print("[bold green]Enter your GEMINI_API_KEY:[/bold green] ", end="")
+                entered_key = sys.stdin.readline().strip()
+
             if entered_key:
                 os.environ["GEMINI_API_KEY"] = entered_key
+                
+                # Persist to .env in current folder if available
+                env_file = Path(".env")
+                try:
+                    if not env_file.exists():
+                        env_file.write_text(f"GEMINI_API_KEY={entered_key}\n", encoding="utf-8")
+                    else:
+                        cur = env_file.read_text(encoding="utf-8")
+                        if "GEMINI_API_KEY" not in cur:
+                            with env_file.open("a", encoding="utf-8") as ef:
+                                ef.write(f"\nGEMINI_API_KEY={entered_key}\n")
+                except Exception:
+                    pass
+
                 _console.print("[green]API key set successfully![/green]\n")
                 return entered_key
             _console.print("[red]API key cannot be empty. Please enter a valid key.[/red]")
@@ -141,20 +164,22 @@ def ensure_api_key(console: Console | None = None) -> str:
 
 class CodeNavigatorAgent:
     """
-    An LLM augmented with retrieval, tools, and memory.
+    An LLM augmented with retrieval, tools, coding capabilities, and memory.
 
-    Implements the agentic loop: send message → execute tools → send results → repeat
+    Implements the agentic loop: send message -> execute tools -> send results -> repeat
     until the LLM responds with just text.
     """
 
-    def __init__(self, model: str = MODEL, api_key: str | None = None) -> None:
-        self.api_key = api_key or ensure_api_key()
+    def __init__(self, model: str = MODEL, console: Console | None = None, api_key: str | None = None) -> None:
+        self.console = console or Console()
+        self.ui = ConsoleUI(console=self.console)
+        self.api_key = api_key or ensure_api_key(self.console)
         self.client = genai.Client(api_key=self.api_key)
         self.model = model
         self.token_tracker = GeminiTokenTracker(csv_path=_TOKEN_CSV, model=model)
         self.tools = _build_tool_definitions()
         self.messages: list[types.Content] = []
-        self.max_iterations = 15
+        self.max_iterations = 20
 
         # Initialize shared components (the three augmentations)
         from indexer.embedder import Embedder
@@ -174,10 +199,24 @@ class CodeNavigatorAgent:
 
     def _execute_tool(self, name: str, tool_input: dict[str, Any]) -> str:
         """Dispatch a tool call to the appropriate handler."""
-        from tools.files import execute_list_directory, execute_read_file
-        from tools.memory import execute_recall_memory, execute_save_memory
-        from tools.repo import execute_clone_and_index, execute_list_repos
-        from tools.search import execute_grep, execute_search_code
+        from tools import (
+            execute_list_directory,
+            execute_read_file,
+            execute_recall_memory,
+            execute_save_memory,
+            execute_clone_and_index,
+            execute_list_repos,
+            execute_grep,
+            execute_search_code,
+            execute_create_file,
+            execute_write_file,
+            execute_replace_file_content,
+            execute_run_command,
+            execute_git_diff,
+            execute_git_status,
+            execute_check_syntax,
+            execute_get_file_outline,
+        )
 
         dispatch: dict[str, Any] = {
             "save_memory": lambda inp: execute_save_memory(self.memory, inp),
@@ -190,6 +229,14 @@ class CodeNavigatorAgent:
             "list_directory": lambda inp: execute_list_directory(self.vector_store, inp),
             "search_code": lambda inp: execute_search_code(self.vector_store, self.embedder, inp),
             "grep": lambda inp: execute_grep(self.vector_store, self.embedder, inp),
+            "create_file": lambda inp: execute_create_file(inp),
+            "write_file": lambda inp: execute_write_file(inp),
+            "replace_file_content": lambda inp: execute_replace_file_content(inp),
+            "run_command": lambda inp: execute_run_command(inp),
+            "git_diff": lambda inp: execute_git_diff(inp),
+            "git_status": lambda inp: execute_git_status(inp),
+            "check_syntax": lambda inp: execute_check_syntax(inp),
+            "get_file_outline": lambda inp: execute_get_file_outline(inp),
         }
 
         handler = dispatch.get(name)
@@ -234,21 +281,14 @@ class CodeNavigatorAgent:
                 text_parts = [p.text for p in assistant_content.parts if p.text]
                 return "\n".join(text_parts) if text_parts else "Done."
 
-            # Execute each tool and print progress
+            # Execute each tool and print progress using ConsoleUI
             tool_responses = []
             for fc in function_calls:
-                # Print tool invocation for educational transparency
-                # fc.args is a dict
-                input_summary = json.dumps(fc.args, separators=(",", ":"))
-                if len(input_summary) > 80:
-                    input_summary = input_summary[:77] + "..."
-                console.print(f"  [dim][tool: {fc.name}] {input_summary}[/dim]")
+                self.ui.display_tool_call(fc.name, fc.args)
 
                 result = self._execute_tool(fc.name, fc.args)
 
-                # Print brief result
-                result_preview = result.split("\n")[0][:80]
-                console.print(f"  [dim]  → {result_preview}[/dim]")
+                self.ui.display_tool_result(fc.name, result)
 
                 tool_responses.append(
                     types.Part(
@@ -271,33 +311,27 @@ class CodeNavigatorAgent:
 def main() -> None:
     """Main orchestration function."""
     console = Console()
+    ui = ConsoleUI(console=console)
     api_key = ensure_api_key(console)
-    agent = CodeNavigatorAgent(api_key=api_key)
+    agent = CodeNavigatorAgent(model=MODEL, console=console, api_key=api_key)
 
-    header = Panel(
-        "[bold cyan]Codebase Navigator[/bold cyan]\n\n"
-        "An LLM enhanced with [green]Retrieval (RAG)[/green], "
-        "[yellow]Tools[/yellow], and [magenta]Memory[/magenta].\n\n"
-        "Select a repo to index, then ask questions about the codebase.",
-        title="Codebase Navigator",
-    )
+    ui.display_app_banner()
 
     repo = interactive_menu(
         console,
         SUGGESTED_REPOS,
         title="Select a Repo to Explore",
-        header=header,
         allow_custom=True,
         custom_prompt="Enter owner/repo (e.g., pallets/flask)",
     )
     if not repo:
         return
 
+    ui.display_app_banner(repo=repo)
     console.print(f"\n[bold green]Indexing:[/bold green] {repo}")
     response = agent.chat(f"index the repo {repo}", console)
     if response:
-        console.print("\n[bold blue]Navigator:[/bold blue]")
-        console.print(Markdown(response))
+        ui.display_agent_response("Navigator", response)
 
     console.print("\n[dim]Ask questions about the codebase. Type 'quit' to exit.[/dim]")
 
@@ -316,8 +350,7 @@ def main() -> None:
             response = agent.chat(user_input, console)
 
             if response:
-                console.print("\n[bold blue]Navigator:[/bold blue]")
-                console.print(Markdown(response))
+                ui.display_agent_response("Navigator", response)
 
             agent.token_tracker.report()
 

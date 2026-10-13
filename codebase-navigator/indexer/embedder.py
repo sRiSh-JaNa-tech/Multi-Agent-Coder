@@ -1,8 +1,8 @@
 """
 Embedding Pipeline
 
-Embeds code chunks using sentence-transformers and stores them in ChromaDB.
-Uses the lightweight all-MiniLM-L6-v2 model for fast local embeddings.
+Embeds code chunks using Google Gemini embeddings (text-embedding-004)
+and stores them in ChromaDB.
 """
 
 from typing import Any

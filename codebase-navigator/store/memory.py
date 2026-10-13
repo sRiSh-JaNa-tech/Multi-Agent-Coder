@@ -48,8 +48,17 @@ class MemoryStore:
 
     def save(self, category: str, content: str, repos: list[str] | None = None) -> str:
         """Save a memory entry."""
-        if category not in self.data:
-            return f"Invalid category: {category}. Use: fact, insight, preference"
+        cat = category.strip().lower()
+        if cat in ("fact", "facts"):
+            norm_category = "facts"
+        elif cat in ("insight", "insights"):
+            norm_category = "insights"
+        elif cat in ("preference", "preferences"):
+            norm_category = "preferences"
+        elif cat in self.data:
+            norm_category = cat
+        else:
+            return f"Invalid category: {category}. Use: facts, insights, preferences"
 
         entry: dict[str, Any] = {
             "content": content,
@@ -58,10 +67,10 @@ class MemoryStore:
         if repos:
             entry["repos"] = repos
 
-        self.data[category].append(entry)
+        self.data[norm_category].append(entry)
         self._save()
-        logger.info("Saved %s: %s", category, content[:80])
-        return f"Saved {category}: {content}"
+        logger.info("Saved %s: %s", norm_category, content[:80])
+        return f"Saved {norm_category}: {content}"
 
     def recall(self, query: str | None = None) -> dict[str, list[dict[str, Any]]]:
         """Recall memories, optionally filtered by keyword."""

@@ -1,21 +1,10 @@
-"""Common utilities for AI agent lessons."""
+"""
+Common package for Codebase Navigator utilities.
+"""
 
-from .logging_config import setup_logging
-from .menu import interactive_menu
-from .token_tracking import (
-    AnthropicTokenTracker,
-    GeminiTokenTracker,
-    LiteLLMTokenTracker,
-    OpenAITokenTracker,
-    TokenUsageTracker,
-)
+from common.logging_config import setup_logging
+from common.token_tracker import GeminiTokenTracker
+from common.menu import interactive_menu
+from common.ui import ConsoleUI
 
-__all__ = [
-    "AnthropicTokenTracker",
-    "GeminiTokenTracker",
-    "LiteLLMTokenTracker",
-    "OpenAITokenTracker",
-    "TokenUsageTracker",
-    "interactive_menu",
-    "setup_logging",
-]
+__all__ = ["setup_logging", "GeminiTokenTracker", "interactive_menu", "ConsoleUI"]

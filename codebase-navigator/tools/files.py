@@ -55,20 +55,12 @@ FILE_TOOLS = [
 ]
 
 
+from tools.repo import find_repo_path
+
+
 def _find_repo_path(repo: str) -> Path | None:
     """Find the local path for a repository."""
-    # Check repos directory
-    repo_path = REPOS_DIR / repo
-    if repo_path.is_dir():
-        return repo_path
-
-    # Check if it's a local- prefixed collection
-    if not repo.startswith("local-"):
-        repo_path = REPOS_DIR / f"local-{repo}"
-        if repo_path.is_dir():
-            return repo_path
-
-    return None
+    return find_repo_path(repo)
 
 
 def execute_read_file(_vector_store: Any, tool_input: dict[str, Any]) -> str:

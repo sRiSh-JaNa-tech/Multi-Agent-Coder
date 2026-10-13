@@ -65,17 +65,21 @@ SEARCH_TOOLS = [
 ]
 
 
+from tools.repo import find_repo_path, normalize_collection_name
+
+
 def execute_search_code(
     vector_store: VectorStore, embedder: Embedder, tool_input: dict[str, Any]
 ) -> str:
     """Semantic search across indexed codebases."""
     query = tool_input["query"]
     repo = tool_input.get("repo")
+    collection_name = normalize_collection_name(repo) if repo else None
 
     query_embedding = embedder.embed_query(query)
     results = vector_store.search(
         query_embedding=query_embedding,
-        collection_name=repo,
+        collection_name=collection_name,
         n_results=5,
     )
 
@@ -108,7 +112,8 @@ def execute_grep(vector_store: VectorStore, _embedder: Embedder, tool_input: dic
 
     # Determine which repos to search
     if repo:
-        search_dirs = [REPOS_DIR / repo]
+        target_path = find_repo_path(repo)
+        search_dirs = [target_path] if target_path and target_path.exists() else []
     else:
         search_dirs = [d for d in REPOS_DIR.iterdir() if d.is_dir()] if REPOS_DIR.exists() else []
 

@@ -48,10 +48,10 @@ REPO_TOOLS = [
 ]
 
 
-def _normalize_collection_name(repo: str) -> str:
+def normalize_collection_name(repo: str) -> str:
     """Convert repo identifier to a valid ChromaDB collection name."""
     # ChromaDB requires: 3-63 chars, starts/ends with alphanumeric, only alphanumeric/underscore/hyphen
-    name = repo.replace("/", "-").replace(".", "-").replace(" ", "-")
+    name = repo.replace("/", "-").replace("\\", "-").replace(".", "-").replace(" ", "-")
     # Ensure it starts with alphanumeric
     if name and not name[0].isalnum():
         name = "r-" + name
@@ -59,17 +59,52 @@ def _normalize_collection_name(repo: str) -> str:
     return name[:63]
 
 
-def _resolve_repo_path(repo: str) -> tuple[Path, str, bool]:
+_normalize_collection_name = normalize_collection_name
+
+
+def find_repo_path(repo: str) -> Path | None:
+    """Find the local filesystem path for a repository."""
+    if not repo:
+        return None
+
+    # Check direct local path
+    direct_path = Path(repo).expanduser()
+    if direct_path.is_dir():
+        return direct_path
+
+    # Check in REPOS_DIR directly
+    repo_path = REPOS_DIR / repo
+    if repo_path.is_dir():
+        return repo_path
+
+    # Check normalized name
+    norm_name = normalize_collection_name(repo)
+    norm_path = REPOS_DIR / norm_name
+    if norm_path.is_dir():
+        return norm_path
+
+    # Check local- prefixed name
+    local_path = REPOS_DIR / f"local-{norm_name}"
+    if local_path.is_dir():
+        return local_path
+
+    return None
+
+
+def resolve_repo_path(repo: str) -> tuple[Path, str, bool]:
     """Resolve repo to a local path. Returns (path, collection_name, needs_clone)."""
     local_path = Path(repo).expanduser()
     if local_path.is_dir():
         name = "local-" + local_path.name
-        return local_path, _normalize_collection_name(name), False
+        return local_path, normalize_collection_name(name), False
 
     # Treat as GitHub repo
-    name = _normalize_collection_name(repo)
+    name = normalize_collection_name(repo)
     clone_dir = REPOS_DIR / name
     return clone_dir, name, not clone_dir.exists()
+
+
+_resolve_repo_path = resolve_repo_path
 
 
 def execute_clone_and_index(

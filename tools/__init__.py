@@ -1,0 +1,41 @@
+"""
+Tool Registry for Multi-Agent Codebase Navigator & Coding Agent.
+"""
+
+from tools.files import FILE_TOOLS, execute_list_directory, execute_read_file
+from tools.memory import MEMORY_TOOLS, execute_recall_memory, execute_save_memory
+from tools.repo import REPO_TOOLS, execute_clone_and_index, execute_list_repos, find_repo_path, normalize_collection_name
+from tools.search import SEARCH_TOOLS, execute_grep, execute_search_code
+from tools.coding import CODING_TOOLS, execute_create_file, execute_replace_file_content, execute_write_file
+from tools.execution import EXECUTION_TOOLS, execute_check_syntax, execute_git_diff, execute_git_status, execute_run_command
+from tools.outline import OUTLINE_TOOLS, execute_get_file_outline
+
+__all__ = [
+    # Tool definitions
+    "FILE_TOOLS",
+    "MEMORY_TOOLS",
+    "REPO_TOOLS",
+    "SEARCH_TOOLS",
+    "CODING_TOOLS",
+    "EXECUTION_TOOLS",
+    "OUTLINE_TOOLS",
+    # Tool executors
+    "execute_read_file",
+    "execute_list_directory",
+    "execute_save_memory",
+    "execute_recall_memory",
+    "execute_clone_and_index",
+    "execute_list_repos",
+    "execute_search_code",
+    "execute_grep",
+    "execute_create_file",
+    "execute_write_file",
+    "execute_replace_file_content",
+    "execute_run_command",
+    "execute_git_diff",
+    "execute_git_status",
+    "execute_check_syntax",
+    "execute_get_file_outline",
+    "find_repo_path",
+    "normalize_collection_name",
+]

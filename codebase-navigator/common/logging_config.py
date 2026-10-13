@@ -1,42 +1,26 @@
 """
-Shared logging configuration for AI agent lessons.
-
-Provides consistent Rich-based logging setup across all lessons.
+Logging Configuration
+Provides standardized Rich-enhanced logging.
 """
 
 import logging
-
+import sys
 from rich.logging import RichHandler
 
 
 def setup_logging(name: str = __name__, level: int = logging.INFO) -> logging.Logger:
-    """
-    Configure logging with Rich handler and return a logger.
-
-    Args:
-        name: Logger name (typically __name__)
-        level: Logging level (default: INFO)
-
-    Returns:
-        Configured logger instance
-    """
-    # Configure logging with Rich
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        handlers=[
-            RichHandler(
-                rich_tracebacks=True,
-                show_time=False,
-                show_path=False,
-                markup=True,
-            )
-        ],
-        force=True,  # Override any existing config
-    )
-
-    # Suppress noisy third-party loggers
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
-    # Return logger for the calling module
-    return logging.getLogger(name)
+    """Configure and return a standardized logger."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        logger.setLevel(level)
+        handler = RichHandler(
+            rich_tracebacks=True,
+            show_time=True,
+            show_path=False,
+            markup=True,
+        )
+        formatter = logging.Formatter("%(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.propagate = False
+    return logger

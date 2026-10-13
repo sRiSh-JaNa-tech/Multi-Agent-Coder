@@ -1,66 +1,53 @@
-"""Interactive arrow-key menu for selecting from a list of options."""
+"""
+Interactive Console Menu
+Provides rich interactive CLI menus for selecting items or entering custom inputs.
+"""
 
-import readchar
+from typing import Any
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
+from rich.prompt import Prompt
 
 
 def interactive_menu(
     console: Console,
-    items: list[str],
+    options: list[str],
     title: str = "Select an Option",
-    header: Panel | str | None = None,
-    allow_custom: bool = False,
-    custom_label: str = "✏️  Custom...",
-    custom_prompt: str = "Enter your choice",
+    header: Any = None,
+    allow_custom: bool = True,
+    custom_prompt: str = "Enter custom value",
 ) -> str | None:
-    """Display an interactive menu with arrow-key navigation.
+    """Display an interactive menu and prompt for user selection."""
+    if header:
+        console.print(header)
 
-    Returns the selected item string, or None if the user quits.
-    """
-    display_items = [*items, custom_label] if allow_custom else list(items)
-    selected_idx = 0
+    console.print(f"\n[bold cyan]{title}:[/bold cyan]")
+    for idx, opt in enumerate(options, 1):
+        console.print(f"  [bold yellow]{idx}[/bold yellow]) {opt}")
+
+    if allow_custom:
+        custom_idx = len(options) + 1
+        console.print(f"  [bold yellow]{custom_idx}[/bold yellow]) [italic]Custom input...[/italic]")
 
     while True:
-        console.clear()
+        try:
+            choice = Prompt.ask("\nEnter choice", default="1")
+            choice = choice.strip()
+            if not choice:
+                continue
 
-        if header is not None:
-            if isinstance(header, str):
-                console.print(header)
+            if choice.isdigit():
+                num = int(choice)
+                if 1 <= num <= len(options):
+                    return options[num - 1]
+                elif allow_custom and num == len(options) + 1:
+                    custom_val = Prompt.ask(f"[bold green]{custom_prompt}[/bold green]").strip()
+                    if custom_val:
+                        return custom_val
+                    console.print("[red]Input cannot be empty.[/red]")
+                else:
+                    console.print("[red]Invalid selection number.[/red]")
             else:
-                console.print(header)
-            console.print()
-
-        table = Table(show_header=False, show_edge=False, pad_edge=False, box=None)
-        table.add_column("Item", style="cyan")
-        for idx, item in enumerate(display_items):
-            if idx == selected_idx:
-                table.add_row(f"▶ {item}", style="bold green")
-            else:
-                table.add_row(f"  {item}")
-
-        console.print(
-            Panel(
-                table,
-                title=f"[bold cyan]{title}[/bold cyan]",
-                border_style="blue",
-                subtitle="[dim]↑↓: Navigate | Enter: Select | q: Quit[/dim]",
-            )
-        )
-
-        key = readchar.readkey()
-
-        if key == readchar.key.UP:
-            selected_idx = (selected_idx - 1) % len(display_items)
-        elif key == readchar.key.DOWN:
-            selected_idx = (selected_idx + 1) % len(display_items)
-        elif key == readchar.key.ENTER:
-            if selected_idx < len(items):
-                return items[selected_idx]
-            # Custom option selected — prompt for free-text input
-            console.print(f"\n[bold green]{custom_prompt}:[/bold green] ", end="")
-            custom = input().strip()
-            return custom if custom else None
-        elif key in ("q", "Q"):
+                # Direct string entry
+                return choice
+        except (KeyboardInterrupt, EOFError):
             return None
