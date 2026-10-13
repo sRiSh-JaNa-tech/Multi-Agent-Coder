@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+_NAV_DIR = str(Path(__file__).resolve().parent.parent / "codebase-navigator")
+if _NAV_DIR not in sys.path:
+    sys.path.insert(0, _NAV_DIR)
+
 import os
 
 from dotenv import find_dotenv, load_dotenv

@@ -1,165 +1,71 @@
-<!-- ---
-title: "Codebase Navigator"
-description: "An augmented LLM agent that explores codebases using retrieval, tools, and memory"
-icon: "layers"
---- -->
+# Codebase Navigator & Coding Agent
 
-# Codebase Navigator
+An autonomous augmented LLM agent designed to explore, understand, edit, and test codebases using **Google Gemini** (`google-genai` SDK, `gemini-2.5-flash-lite`), **ChromaDB**, and a rich suite of developer tools.
 
-An agent that helps engineers explore and understand unfamiliar codebases. Point it at any GitHub repo, and it will clone, index, and answer questions using semantic search while maintaining memory across sessions.
-
-> Implements the [Augmented LLM](https://www.anthropic.com/engineering/building-effective-agents) pattern from Anthropic's "Building Effective Agents" — an LLM enhanced with retrieval, tools, and memory.
-
-
-> **📚 Setup & Running:** See [SETUP.md](../../SETUP.md) for prerequisites, setup instructions, and how to run tutorials.
-
-## 🎯 What You'll Learn
-
-- Understand the **Augmented LLM** as the foundation of all agentic patterns
-- Implement **retrieval augmentation (RAG)** with ChromaDB and sentence-transformers
-- Connect LLMs to **tools** they can invoke autonomously via the agentic loop
-- Add persistent **memory** to maintain context across sessions
-- Build a practical agent that explores real codebases
-
-## 📦 Available Examples
-
-| # | Script | Provider | What it demonstrates |
-|---|--------|----------|---------------------|
-| 01 | `01_codebase_navigator.py` | ![Anthropic](https://img.shields.io/badge/Anthropic-191919?style=for-the-badge&logo=anthropic&logoColor=white) | Full augmented LLM with RAG, tools, and memory |
-
-> **Contributions welcome!** We're looking for help porting this tutorial to additional providers. See [#13 — Port to OpenAI API](https://github.com/agenticloops-ai/ai-agents-engineering/issues/13) if you'd like to contribute.
-
-## 🔑 Key Concepts
-
-### Augmentations
-
-**Retrieval (RAG)** — Semantic search over indexed codebases using ChromaDB and sentence-transformers. The agent generates search queries to find relevant code chunks based on meaning, not just keywords.
-
-| Component | Description |
-|-----------|-------------|
-| **Vector Store** | Local ChromaDB containing embedded code chunks |
-| **Chunking** | Tree-sitter for AST-aware chunking (functions, classes, modules) |
-| **Embeddings** | Sentence-transformers (`all-MiniLM-L6-v2`) for local embeddings |
-
-**Tools** — Clone repos, read files, search code, grep for patterns. The LLM decides which tools to use and when, executing them through Anthropic's native tool use API.
-
-| Tool | Purpose | Example use |
-|------|---------|-------------|
-| `clone_and_index` | Clone and index a GitHub repo | "index pallets/flask" |
-| `list_repos` | List all indexed repositories | "what repos do I have?" |
-| `search_code` | Semantic search over code | "how does routing work?" |
-| `read_file` | Read file with line numbers | reading a specific file |
-| `list_directory` | Explore repo structure | "show me the project layout" |
-| `grep` | Regex pattern search | "find all TODO comments" |
-| `save_memory` | Persist a fact/insight/preference | automatic when discovering patterns |
-| `recall_memory` | Retrieve stored memories | automatic at session start |
-
-**Memory** — Persistent JSON storage for facts, insights, and user preferences. Memory is loaded into the system prompt at the start of each session, giving the agent context from previous conversations.
-
-Enables context-aware follow-ups like:
-  > *"Earlier you found the auth logic in `src/auth/` — want me to look for related middleware?"*
-
-### The Agentic Loop
-
-The core pattern that makes this work (same as the [Agent Loop](../05-agent-loop/README.md) tutorial).
-
-The loop continues until the LLM responds with just text (no tool calls), indicating it has enough information to answer.
-
-### RAG Pipeline
-
-```mermaid
 ---
-config:
-  look: handDrawn
-  theme: neutral
+
+## Architecture Overview
+
+The agent implements the **Augmented LLM** pattern:
+
+```
+                      +-----------------------------------+
+                      |      Gemini 2.5 Flash Lite        |
+                      +-----------------+-----------------+
+                                        |
+                 +----------------------+----------------------+
+                 |                      |                      |
+                 v                      v                      v
+        +----------------+     +----------------+     +----------------+
+        | Retrieval (RAG)|     | Memory Store   |     | Tool Registry  |
+        |  ChromaDB +    |     | Cross-session  |     |  16 Autonomous |
+        |  Embeddings    |     | Knowledge base |     |  Tools         |
+        +----------------+     +----------------+     +----------------+
+```
+
+### The Three Augmentations:
+1. **Retrieval (RAG)**: Indexes code repositories into AST-aware chunks, creates vector embeddings via Gemini `text-embedding-004`, and performs semantic search using ChromaDB.
+2. **Cross-Session Memory**: Stores architecture patterns, key files, and user preferences into `data/memory.json` to retain insights across runs.
+3. **Tool Execution Loop**: An autonomous multi-turn ReAct loop that executes tool calls and feeds results back to Gemini.
+
 ---
-flowchart TB
-  subgraph Indexing["📥 Indexing"]
-    direction LR
-    A["📁 Repository"] -->|chunk| B["📄 Chunks"]
-    B -->|embed| C["🔢 Vectors"]
 
-  end
-  C -->|store| D["🗄️ ChromaDB"]  
+## Tool Capabilities
 
-  E["🗣️ User Query"] -->|embed| F["🔢 Query Vector"]
-  F -->|similarity search| D
-  D -->|relevant chunks| G["🧠 LLM"]
+| Category | Tools | Description |
+| :--- | :--- | :--- |
+| **Repository** | `clone_and_index`, `list_repos` | Clones any public GitHub repo and indexes into ChromaDB. |
+| **Search & Navigation** | `search_code`, `grep`, `read_file`, `list_directory` | Semantic vector search, regex grep, and filesystem inspection. |
+| **Code Inspection** | `get_file_outline` | AST-based class, function, and method outlines with line numbers. |
+| **Coding & Editing** | `create_file`, `write_file`, `replace_file_content` | Precision file modifications and content substitution. |
+| **Execution & Testing** | `run_command`, `check_syntax`, `git_diff`, `git_status` | Shell command execution, syntax validation, and git review. |
+| **Memory** | `save_memory`, `recall_memory` | Save and query long-term facts, architecture insights, and user preferences. |
+
+---
+
+## Setup & Running
+
+### 1. Requirements
+- Python 3.11+
+- Virtual environment with dependencies installed:
+  ```bash
+  pip install -r pyproject.toml
+  # or using uv:
+  uv sync
+  ```
+
+### 2. Run the Navigator
+```bash
+python 01_codebase_navigator.py
+```
+> **API Key Prompting**: If `GEMINI_API_KEY` is not present in your environment, the agent will prompt you in the terminal and save it to `.env` automatically.
+
+### 3. Demo the UI
+```bash
+python demo_ui.py
 ```
 
-**Chunking strategy**: Python files split on top-level `class`/`def` definitions. Other files split every 50 lines with 10-line overlap. Simple heuristics that work well for educational purposes.
-
-**Embedding model**: `all-MiniLM-L6-v2` via sentence-transformers — lightweight, runs locally, no external API needed.
-
-## 🏗️ Code Structure
-
+### 4. Run End-to-End Tests
+```bash
+python test_e2e_tools.py
 ```
-06-codebase-navigator/
-├── 01_codebase_navigator.py             # Main entry point — agent + CLI
-├── store/
-│   ├── memory.py                   # JSON-based persistent memory
-│   └── vector.py                   # ChromaDB wrapper for embeddings
-├── indexer/
-│   ├── chunker.py                  # File chunking strategies
-│   └── embedder.py                 # Sentence-transformer embeddings
-├── tools/
-│   ├── memory.py                   # save_memory, recall_memory
-│   ├── repo.py                     # clone_and_index, list_repos
-│   ├── files.py                    # read_file, list_directory
-│   └── search.py                   # search_code, grep
-├── repos/                          # Cloned repositories (gitignored)
-├── data/                           # ChromaDB persistence (gitignored)
-└── memory.json                     # Persistent memory (gitignored)
-```
-
-## 💬 Example Session
-
-```
-Codebase Navigator
-
-> index the flask repo from pallets/flask
-  [tool: clone_and_index] {"repo":"pallets/flask"}
-  → Indexed 'pallets/flask': 142 files, 847 chunks. Ready to search!
-
-Navigator:
-Indexed pallets/flask successfully. What would you like to explore?
-
-> how does routing work?
-  [tool: search_code] {"query":"routing request handling","repo":"pallets-flask"}
-  → Search results for: 'routing request handling'
-
-Navigator:
-Flask's routing is built on Werkzeug's routing system. Here's how it works:
-
-1. **Route Registration** (`src/flask/scaffold.py:42`)
-   Routes are registered via the `@app.route()` decorator...
-
-2. **URL Map** (`src/flask/app.py:315`)
-   Flask maintains a Werkzeug `Map` object...
-
-> find all TODO comments
-  [tool: grep] {"pattern":"TODO","repo":"pallets-flask"}
-  → Found 3 matches for `TODO`
-
-Navigator:
-Found 3 TODO comments in the Flask codebase:
-- `src/flask/testing.py:89` — TODO: deprecate this in 3.1
-...
-```
-
-## ⚠️ Important Considerations
-
-- **Embedding model choice** — we use `all-MiniLM-L6-v2` because it's small (~80MB), runs locally with no extra API key, and is good enough for teaching RAG. For production code search, consider a code-specific model (e.g., CodeBERT or OpenAI embeddings)
-- **Embedding model downloads on first run** — the model is downloaded once from HuggingFace and cached locally
-- **Large repos take time to index** — chunking and embedding hundreds of files requires patience
-- **ChromaDB persists locally** — indexed repos are stored in `./data/chroma/` and survive restarts
-- **Memory grows unbounded** — in production, you'd want to limit or summarize old memories
-- **No AST parsing** — chunking uses simple line-based heuristics, not language-aware parsing
-
-## 👉 Next Steps
-
-- **[Prompt Chaining](../../02-effective-agents/01-prompt-chaining/README.md)** — decompose tasks into sequential LLM calls
-- Try indexing multiple repos and asking cross-repo questions
-- Experiment with different embedding models
-- Add new tools (e.g., `run_tests`, `explain_function`)
-- Try different chunking strategies for better search results

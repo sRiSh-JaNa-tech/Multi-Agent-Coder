@@ -1,7 +1,0 @@
-repos/
-data/
-__pycache__/
-.ruff_cache/
-.venv/
-*.pyc
-memory.json
