@@ -88,6 +88,21 @@ Hands-on, self-contained examples demonstrating standard patterns in LLM orchest
 
 ---
 
+
+### 4. Pluggable LLM Harness (`03_llm_harness_demo.py` / `codebase-navigator/harness/`)
+- **Adapter-Agnostic Engine**: Quickly attach **any LLM backend** (`MockLLMAdapter`, `CallableAdapter`, `GeminiAdapter`, `OpenAICompatibleAdapter`) to run agentic tool execution.
+- **Isolated from Main API**: Runs as a separate testing/execution subsystem—zero risk of breaking the main working agent.
+- **Synchronous Ticket Worker (`HarnessTicketWorker`)**: Allows multi-agent ticket execution powered by attached custom models or offline mocks.
+- **Deterministic 0-Cost Testing**: `MockLLMAdapter` allows instant multi-turn tool calling and ReAct loop verification without API tokens or network latency.
+
+```bash
+# Run the interactive harness demo
+python 03_llm_harness_demo.py
+
+# Run harness unit & integration tests
+python codebase-navigator/test_harness.py
+```
+
 ## Quickstart
 
 ### 1. Prerequisites

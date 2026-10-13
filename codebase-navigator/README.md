@@ -105,3 +105,54 @@ An autonomous multi-agent ticket system where the **Main Orchestrator** decompos
 ```bash
 python 02_ticket_orchestrator.py
 ```
+
+---
+
+## Pluggable LLM Harness (`harness/`)
+
+A dedicated testing and execution harness that enables developers to quickly attach **any LLM backend** (Mock, Custom Python Callable, Gemini, or OpenAI-compatible) and run agentic tool execution or ticket workflows **without touching or modifying the main API implementation**.
+
+```
+                   +---------------------------------------+
+                   |            BaseLLMAdapter             |
+                   +-------------------+-------------------+
+                                       |
+          +------------------+---------+---------+------------------+
+          |                  |                   |                  |
+          v                  v                   v                  v
++------------------+ +----------------+ +------------------+ +----------------+
+|  MockLLMAdapter  | |CallableAdapter | |  GeminiAdapter   | |OpenAICompat.   |
+| (Offline, 0-cost,| |(Attach custom  | |(gemini-2.5-flash | |(Ollama, vLLM,  |
+|  scripted tests) | | Python lambda) | | -lite live SDK)  | | LocalAI/OpenAI)|
++--------+---------+ +-------+--------+ +--------+---------+ +-------+--------+
+         |                   |                   |                   |
+         +-------------------+---------+---------+-------------------+
+                                       |
+                                       v
+                             +--------------------+
+                             |    HarnessAgent    |  <-- Pluggable Tool Registry
+                             |  Autonomous ReAct  |      (files, outline, coding,
+                             +---------+----------+       execution, commands)
+                                       |
+                                       v
+                           +------------------------+
+                           |  HarnessTicketWorker   |  <-- Synchronous FIFO Queue
+                           |  (Ticket Queue: max 3) |      (decoupled from main)
+                           +------------------------+
+```
+
+### Supported Adapters:
+- **`MockLLMAdapter`**: Completely offline, 0-cost, instant responses with scripted tool calls. Ideal for CI/CD and deterministic test cases.
+- **`CallableAdapter`**: Wraps any Python function `(messages, tools) -> response`. Enables 3-line custom model integration.
+- **`GeminiAdapter`**: Official `google-genai` integration with native tool call formatting and token usage metadata tracking.
+- **`OpenAICompatibleAdapter`**: Connects to OpenAI, Ollama, LM Studio, vLLM, or DeepSeek without requiring extra heavy dependencies.
+
+### Run Harness Interactive Demo:
+```bash
+# Interactive mode
+python 03_llm_harness_demo.py
+
+# Run all automated tests
+python test_harness.py
+```
+
