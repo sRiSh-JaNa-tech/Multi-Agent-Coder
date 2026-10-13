@@ -131,7 +131,8 @@ class AgentWorker:
                 )
         except Exception as e:
             logger.warning("LLM call failed for %s on %s: %s (using local fallback resolution)", self.agent_id, ticket.id, e)
-            return f"[{self.agent_id} Resolved]: Executed task '{ticket.title}'. Context: {ticket.description[:100]}..."
+            desc_snippet = (ticket.description or "")[:100]
+            return f"[{self.agent_id} Resolved]: Executed task '{ticket.title}'. Context: {desc_snippet}..."
 
     def process_next_ticket(self, callback: Callable[[Ticket], None] | None = None) -> Ticket | None:
         """

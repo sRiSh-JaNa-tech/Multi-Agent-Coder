@@ -92,8 +92,10 @@ def _outline_generic(content: str, filepath: str) -> str:
 
 def execute_get_file_outline(tool_input: dict[str, Any]) -> str:
     """Execute get_file_outline tool."""
-    repo = tool_input["repo"]
-    filepath = tool_input["filepath"]
+    repo = tool_input.get("repo", "")
+    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+    if not repo or not filepath:
+        return "Error: 'repo' and 'filepath' parameters are required."
 
     repo_path = find_repo_path(repo)
     if not repo_path:

@@ -117,7 +117,8 @@ class ConsoleUI:
         param_table.add_column(style="dim")
         param_table.add_column(style="white")
 
-        for k, v in args.items():
+        safe_args = args if isinstance(args, dict) else {}
+        for k, v in safe_args.items():
             str_v = str(v)
             if len(str_v) > 85:
                 str_v = str_v[:82] + "..."
@@ -141,6 +142,7 @@ class ConsoleUI:
         )
 
     def display_tool_result(self, name: str, result: str) -> None:
+        result = str(result) if result is not None else ""
         """Render customized view based on tool type."""
         # 1. Outline View
         if name == "get_file_outline" and not result.startswith("File not found"):

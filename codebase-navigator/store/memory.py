@@ -15,7 +15,7 @@ from common.logging_config import setup_logging
 logger = setup_logging(__name__)
 
 # Default memory file location
-DEFAULT_MEMORY_PATH = Path(__file__).parent.parent / "memory.json"
+DEFAULT_MEMORY_PATH = Path(__file__).parent.parent / "data" / "memory.json"
 
 
 class MemoryStore:

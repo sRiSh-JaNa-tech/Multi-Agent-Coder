@@ -92,9 +92,11 @@ CODING_TOOLS = [
 
 def execute_create_file(tool_input: dict[str, Any]) -> str:
     """Create a new file with parent directories."""
-    repo = tool_input["repo"]
-    filepath = tool_input["filepath"]
-    content = tool_input["content"]
+    repo = tool_input.get("repo", "")
+    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+    content = tool_input.get("content", "")
+    if not repo or not filepath:
+        return "Error: 'repo' and 'filepath' parameters are required."
 
     repo_path = find_repo_path(repo)
     if not repo_path:
@@ -117,9 +119,11 @@ def execute_create_file(tool_input: dict[str, Any]) -> str:
 
 def execute_write_file(tool_input: dict[str, Any]) -> str:
     """Write or overwrite file contents."""
-    repo = tool_input["repo"]
-    filepath = tool_input["filepath"]
-    content = tool_input["content"]
+    repo = tool_input.get("repo", "")
+    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+    content = tool_input.get("content", "")
+    if not repo or not filepath:
+        return "Error: 'repo' and 'filepath' parameters are required."
 
     repo_path = find_repo_path(repo)
     if not repo_path:
@@ -141,10 +145,12 @@ def execute_write_file(tool_input: dict[str, Any]) -> str:
 
 def execute_replace_file_content(tool_input: dict[str, Any]) -> str:
     """Perform surgical text replacement."""
-    repo = tool_input["repo"]
-    filepath = tool_input["filepath"]
-    target_content = tool_input["target_content"]
-    replacement_content = tool_input["replacement_content"]
+    repo = tool_input.get("repo", "")
+    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+    target_content = tool_input.get("target_content", "")
+    replacement_content = tool_input.get("replacement_content", "")
+    if not repo or not filepath:
+        return "Error: 'repo' and 'filepath' parameters are required."
 
     repo_path = find_repo_path(repo)
     if not repo_path:

@@ -192,8 +192,10 @@ def execute_git_status(tool_input: dict[str, Any]) -> str:
 
 def execute_check_syntax(tool_input: dict[str, Any]) -> str:
     """Check syntax of code/config files without running them."""
-    repo = tool_input["repo"]
-    filepath = tool_input["filepath"]
+    repo = tool_input.get("repo", "")
+    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+    if not repo or not filepath:
+        return "Error: 'repo' and 'filepath' parameters are required."
 
     repo_path = find_repo_path(repo)
     if not repo_path:

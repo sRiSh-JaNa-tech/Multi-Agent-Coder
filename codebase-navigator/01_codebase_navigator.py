@@ -192,7 +192,6 @@ class CodeNavigatorAgent:
                 console.print(f"[bold red]{msg}[/bold red]")
             raise RuntimeError(msg)
 
-        CodeNavigatorAgent._active_instances.add(self)
         self.console = console or Console()
         self.ui = ConsoleUI(console=self.console)
         self.api_key = api_key or ensure_api_key(self.console)
@@ -211,6 +210,9 @@ class CodeNavigatorAgent:
         self.memory = MemoryStore()
         self.vector_store = VectorStore()
         self.embedder = Embedder(api_key=self.api_key)
+
+        # Register instance only after full successful initialization
+        CodeNavigatorAgent._active_instances.add(self)
 
     def close(self) -> None:
         """Release agent instance from active tracking."""
@@ -304,24 +306,30 @@ class CodeNavigatorAgent:
 
             self.token_tracker.track(response.usage_metadata, demo_name="Codebase Navigator")
 
+            if not response.candidates or not response.candidates[0].content:
+                logger.warning("Empty response received from Gemini.")
+                return "Received empty response from model."
+
             # Add assistant's response to history
             assistant_content = response.candidates[0].content
             self.messages.append(assistant_content)
 
+            parts = assistant_content.parts or []
             # Check for function calls
-            function_calls = [p.function_call for p in assistant_content.parts if p.function_call]
+            function_calls = [p.function_call for p in parts if p.function_call]
             
             if not function_calls:
                 # If no function calls, return the text response
-                text_parts = [p.text for p in assistant_content.parts if p.text]
+                text_parts = [p.text for p in parts if p.text]
                 return "\n".join(text_parts) if text_parts else "Done."
 
             # Execute each tool and print progress using ConsoleUI
             tool_responses = []
             for fc in function_calls:
-                self.ui.display_tool_call(fc.name, fc.args)
+                call_args = fc.args if fc.args is not None else {}
+                self.ui.display_tool_call(fc.name, call_args)
 
-                result = self._execute_tool(fc.name, fc.args)
+                result = self._execute_tool(fc.name, call_args)
 
                 self.ui.display_tool_result(fc.name, result)
 

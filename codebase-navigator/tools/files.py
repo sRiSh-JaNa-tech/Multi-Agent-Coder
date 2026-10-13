@@ -65,8 +65,12 @@ def _find_repo_path(repo: str) -> Path | None:
 
 def execute_read_file(_vector_store: Any, tool_input: dict[str, Any]) -> str:
     """Read a file from an indexed repository with line numbers."""
-    repo = tool_input["repo"]
-    filepath = tool_input["filepath"]
+    repo = tool_input.get("repo", "")
+    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+    if not repo:
+        return "Error: 'repo' parameter is required."
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
 
     repo_path = _find_repo_path(repo)
     if not repo_path:
@@ -95,14 +99,16 @@ def execute_read_file(_vector_store: Any, tool_input: dict[str, Any]) -> str:
 
 def execute_list_directory(_vector_store: Any, tool_input: dict[str, Any]) -> str:
     """List directory contents of an indexed repository."""
-    repo = tool_input["repo"]
-    subpath = tool_input.get("path", "")
+    repo = tool_input.get("repo", "")
+    subpath = (tool_input.get("path") or tool_input.get("subpath") or "").lstrip("/\\")
+    if not repo:
+        return "Error: 'repo' parameter is required."
 
     repo_path = _find_repo_path(repo)
     if not repo_path:
         return f"Repository '{repo}' not found locally."
 
-    target = repo_path / subpath
+    target = repo_path / subpath if subpath else repo_path
     if not target.is_dir():
         return f"Directory not found: {subpath or '/'} in {repo}"
 
@@ -113,7 +119,7 @@ def execute_list_directory(_vector_store: Any, tool_input: dict[str, Any]) -> st
         if entry.name.startswith("."):
             continue
         if entry.is_dir():
-            lines.append(f"  📁 {entry.name}/")
+            lines.append(f"  [dir] {entry.name}/")
         else:
             size = entry.stat().st_size
             if size < 1024:
@@ -122,6 +128,6 @@ def execute_list_directory(_vector_store: Any, tool_input: dict[str, Any]) -> st
                 size_str = f"{size / 1024:.1f} KB"
             else:
                 size_str = f"{size / (1024 * 1024):.1f} MB"
-            lines.append(f"  📄 {entry.name} ({size_str})")
+            lines.append(f"  [file] {entry.name} ({size_str})")
 
     return "\n".join(lines)
