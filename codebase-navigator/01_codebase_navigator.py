@@ -12,6 +12,7 @@ semantic search — while maintaining memory across sessions.
 
 import json
 import time
+import os
 from pathlib import Path
 from typing import Any
 from google import genai
@@ -20,6 +21,7 @@ from dotenv import find_dotenv, load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Prompt
 
 from common import GeminiTokenTracker, setup_logging
 from common.menu import interactive_menu
@@ -108,6 +110,35 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
     return [{"function_declarations": all_tools}]
 
 
+def ensure_api_key(console: Console | None = None) -> str:
+    """Ensure GEMINI_API_KEY is available in environment or prompt the user."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if api_key:
+        return api_key
+
+    _console = console or Console()
+    _console.print(
+        Panel(
+            "[bold yellow]GEMINI_API_KEY not found in environment or .env[/bold yellow]\n\n"
+            "Please enter your Google Gemini API key to proceed.",
+            title="API Key Required",
+            border_style="yellow",
+        )
+    )
+
+    while True:
+        try:
+            entered_key = Prompt.ask("[bold green]Enter your GEMINI_API_KEY[/bold green]", password=True).strip()
+            if entered_key:
+                os.environ["GEMINI_API_KEY"] = entered_key
+                _console.print("[green]API key set successfully![/green]\n")
+                return entered_key
+            _console.print("[red]API key cannot be empty. Please enter a valid key.[/red]")
+        except (KeyboardInterrupt, EOFError):
+            _console.print("\n[yellow]Exiting: API key entry cancelled.[/yellow]")
+            raise SystemExit(0)
+
+
 class CodeNavigatorAgent:
     """
     An LLM augmented with retrieval, tools, and memory.
@@ -116,8 +147,9 @@ class CodeNavigatorAgent:
     until the LLM responds with just text.
     """
 
-    def __init__(self, model: str = MODEL) -> None:
-        self.client = genai.Client()
+    def __init__(self, model: str = MODEL, api_key: str | None = None) -> None:
+        self.api_key = api_key or ensure_api_key()
+        self.client = genai.Client(api_key=self.api_key)
         self.model = model
         self.token_tracker = GeminiTokenTracker(csv_path=_TOKEN_CSV, model=model)
         self.tools = _build_tool_definitions()
@@ -131,7 +163,7 @@ class CodeNavigatorAgent:
 
         self.memory = MemoryStore()
         self.vector_store = VectorStore()
-        self.embedder = Embedder()
+        self.embedder = Embedder(api_key=self.api_key)
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with memory context."""
@@ -238,10 +270,9 @@ class CodeNavigatorAgent:
 
 def main() -> None:
     """Main orchestration function."""
-
-    agent = CodeNavigatorAgent()
-
     console = Console()
+    api_key = ensure_api_key(console)
+    agent = CodeNavigatorAgent(api_key=api_key)
 
     header = Panel(
         "[bold cyan]Codebase Navigator[/bold cyan]\n\n"

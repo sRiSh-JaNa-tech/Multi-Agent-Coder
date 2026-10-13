@@ -5,6 +5,7 @@ Embeds code chunks using sentence-transformers and stores them in ChromaDB.
 Uses the lightweight all-MiniLM-L6-v2 model for fast local embeddings.
 """
 
+from typing import Any
 from google import genai
 from common.logging_config import setup_logging
 
@@ -17,9 +18,12 @@ MODEL_NAME = "text-embedding-004"
 class Embedder:
     """Wraps Gemini for generating embeddings."""
 
-    def __init__(self, model_name: str = MODEL_NAME) -> None:
+    def __init__(self, model_name: str = MODEL_NAME, api_key: str | None = None) -> None:
         logger.info("Loading Gemini embedding model: %s", model_name)
-        self.client = genai.Client()
+        if api_key:
+            self.client = genai.Client(api_key=api_key)
+        else:
+            self.client = genai.Client()
         self.model_name = model_name
 
     def embed(self, texts: list[str]) -> list[list[float]]:
