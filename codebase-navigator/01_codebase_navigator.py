@@ -162,6 +162,15 @@ def ensure_api_key(console: Console | None = None) -> str:
             raise SystemExit(0)
 
 
+def get_max_agents() -> int:
+    """Read the maximum active agents limit from .env (defaults to 3)."""
+    val = os.getenv("MAX_AGENTS", os.getenv("MAX_ACTIVE_AGENTS", "3")).strip()
+    try:
+        return max(1, int(val))
+    except ValueError:
+        return 3
+
+
 class CodeNavigatorAgent:
     """
     An LLM augmented with retrieval, tools, coding capabilities, and memory.
@@ -169,8 +178,21 @@ class CodeNavigatorAgent:
     Implements the agentic loop: send message -> execute tools -> send results -> repeat
     until the LLM responds with just text.
     """
+    _active_instances: set = set()
 
     def __init__(self, model: str = MODEL, console: Console | None = None, api_key: str | None = None) -> None:
+        max_agents = get_max_agents()
+        if len(CodeNavigatorAgent._active_instances) >= max_agents:
+            msg = (
+                f"Agent launch limit exceeded: {len(CodeNavigatorAgent._active_instances)}/{max_agents} active agents. "
+                "Adjust MAX_AGENTS in .env to allow more concurrent agents."
+            )
+            logger.error(msg)
+            if console:
+                console.print(f"[bold red]{msg}[/bold red]")
+            raise RuntimeError(msg)
+
+        CodeNavigatorAgent._active_instances.add(self)
         self.console = console or Console()
         self.ui = ConsoleUI(console=self.console)
         self.api_key = api_key or ensure_api_key(self.console)
@@ -189,6 +211,19 @@ class CodeNavigatorAgent:
         self.memory = MemoryStore()
         self.vector_store = VectorStore()
         self.embedder = Embedder(api_key=self.api_key)
+
+    def close(self) -> None:
+        """Release agent instance from active tracking."""
+        CodeNavigatorAgent._active_instances.discard(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        CodeNavigatorAgent._active_instances.discard(self)
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with memory context."""
