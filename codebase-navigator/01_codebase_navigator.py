@@ -39,6 +39,8 @@ SUGGESTED_REPOS = [
     "pallets/flask",
 ]
 
+MODEL = "gemini-2.5-flash-lite"
+
 
 SYSTEM_PROMPT = """You are a Codebase Navigator — an AI assistant that helps software engineers \
 explore and understand codebases.
@@ -114,7 +116,7 @@ class CodeNavigatorAgent:
     until the LLM responds with just text.
     """
 
-    def __init__(self, model: str = "gemini-2.0-flash") -> None:
+    def __init__(self, model: str = MODEL) -> None:
         self.client = genai.Client()
         self.model = model
         self.token_tracker = GeminiTokenTracker(csv_path=_TOKEN_CSV, model=model)
