@@ -353,14 +353,32 @@ class CodeNavigatorAgent:
 
 def main() -> None:
     """Main orchestration function."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Codebase Navigator Agent")
+    parser.add_argument("-p", "--prompt", type=str, help="Single prompt to execute directly")
+    parser.add_argument("-r", "--repo", type=str, help="Repository to explore (e.g. '.' or 'pallets/flask')")
+    cli_args, _ = parser.parse_known_args()
+
     console = Console()
     ui = ConsoleUI(console=console)
     api_key = ensure_api_key(console)
     agent = CodeNavigatorAgent(model=MODEL, console=console, api_key=api_key)
 
+    # 1. Direct one-shot prompt execution
+    if cli_args.prompt:
+        repo = cli_args.repo or "."
+        ui.display_app_banner(repo=repo)
+        console.print(f"[bold green]User Prompt:[/bold green] {cli_args.prompt}\n")
+        response = agent.chat(cli_args.prompt, console)
+        if response:
+            ui.display_agent_response("Navigator", response)
+        agent.token_tracker.report()
+        return
+
+    # 2. Interactive Menu & Loop
     ui.display_app_banner()
 
-    repo = interactive_menu(
+    repo = cli_args.repo or interactive_menu(
         console,
         SUGGESTED_REPOS,
         title="Select a Repo to Explore",
@@ -400,9 +418,8 @@ def main() -> None:
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted.[/yellow]")
 
-    console.print()
+    console.print("\n[bold]Session Summary:[/bold]")
     agent.token_tracker.report()
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
