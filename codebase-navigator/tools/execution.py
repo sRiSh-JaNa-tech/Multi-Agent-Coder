@@ -1,228 +1,230 @@
 """
-Execution & Validation Tools
-
-Tools for running tests, linter commands, git inspections, and syntax checks.
-Used by the Reviewer and Orchestrator agents.
+Execution Tools
+Tools for running sandboxed commands, validating syntax, and inspecting git status/diff.
+Includes process-group isolation, secret stripping, timeout enforcement, and output truncation.
 """
 
-import ast
-import json
-import subprocess
+from dataclasses import dataclass
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
 from typing import Any
 
-from tools.repo import find_repo_path
 from common.logging_config import setup_logging
 
 logger = setup_logging(__name__)
 
+
+@dataclass
+class CommandResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
+def truncate_output(text: str, max_chars: int = 4000) -> str:
+    """Truncate long terminal output to head + tail to prevent context explosion."""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    omitted = len(text) - max_chars
+    return f"{text[:half]}\n... [TRUNCATED {omitted} CHARS] ...\n{text[-half:]}"
+
+
+def run_sandboxed_command(
+    cmd: list[str],
+    cwd: Path,
+    timeout_seconds: float = 30.0,
+    max_output_chars: int = 4000,
+) -> CommandResult:
+    """
+    Run a subprocess with stdin closed, secrets stripped from environment,
+    process-group sandboxing, hard timeout enforcement, and output truncation.
+    """
+    # Strip sensitive API keys and secrets from child environment
+    safe_env = {
+        k: v for k, v in os.environ.items()
+        if not any(secret in k.upper() for secret in ("API_KEY", "SECRET", "TOKEN", "PASSWORD"))
+    }
+    safe_env["PYTHONUNBUFFERED"] = "1"
+
+    # Start child in dedicated process group where supported
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(cwd.resolve()),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "env": safe_env,
+    }
+
+    if hasattr(os, "setsid") or sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+    else:
+        # On Windows, start_new_session=True creates a new process group in py3.11+
+        try:
+            popen_kwargs["start_new_session"] = True
+        except Exception:
+            pass
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        return CommandResult(
+            exit_code=proc.returncode,
+            stdout=truncate_output(stdout or "", max_output_chars),
+            stderr=truncate_output(stderr or "", max_output_chars),
+            timed_out=False,
+        )
+    except subprocess.TimeoutExpired:
+        # Terminate entire process group so children don't become zombies
+        if hasattr(os, "killpg") and hasattr(signal, "SIGKILL"):
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        else:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+        try:
+            stdout, stderr = proc.communicate(timeout=2.0)
+        except Exception:
+            stdout, stderr = "", ""
+
+        err_msg = (stderr or "") + f"\nProcess killed after {timeout_seconds}s timeout."
+        return CommandResult(
+            exit_code=-1,
+            stdout=truncate_output(stdout or "", max_output_chars),
+            stderr=truncate_output(err_msg, max_output_chars),
+            timed_out=True,
+        )
+
+
+def _get_target_root(tool_input: dict[str, Any], workspace_root: Path | None = None) -> Path:
+    if workspace_root:
+        return workspace_root
+    repo = tool_input.get("repo")
+    if repo:
+        p = Path(repo).expanduser()
+        if p.is_dir():
+            return p
+        try:
+            from .repo import find_repo_path
+            found = find_repo_path(repo)
+            if found:
+                return found
+        except Exception:
+            pass
+    return Path.cwd()
+
+
 EXECUTION_TOOLS = [
     {
         "name": "run_command",
-        "description": (
-            "Execute a shell command (such as running tests, linters, or build scripts) "
-            "inside the repository directory."
-        ),
+        "description": "Run a non-interactive shell command in the repository with a timeout.",
         "parameters": {
             "type": "object",
             "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Shell command to run (e.g., 'pytest tests/test_app.py', 'ruff check .')",
-                },
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path where the command should execute",
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": "Timeout in seconds (default: 60)",
-                    "default": 60,
-                },
+                "command": {"type": "string", "description": "Command to run."},
+                "timeout": {"type": "integer", "description": "Timeout in seconds (default: 30).", "default": 30},
             },
-            "required": ["command", "repo"],
-        },
-    },
-    {
-        "name": "git_diff",
-        "description": "View git diff of modified, staged, or unstaged files in the repository.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path",
-                },
-                "filepath": {
-                    "type": "string",
-                    "description": "Optional specific file to limit the diff to",
-                },
-            },
-            "required": ["repo"],
-        },
-    },
-    {
-        "name": "git_status",
-        "description": "View short git status of untracked and modified files in the repository.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path",
-                },
-            },
-            "required": ["repo"],
+            "required": ["command"],
         },
     },
     {
         "name": "check_syntax",
-        "description": "Validate syntax of a Python or JSON file without executing it.",
+        "description": "Check Python syntax of a file using python -m py_compile.",
         "parameters": {
             "type": "object",
             "properties": {
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path",
-                },
-                "filepath": {
-                    "type": "string",
-                    "description": "Relative path to the file to check",
-                },
+                "filepath": {"type": "string", "description": "File to check."},
             },
-            "required": ["repo", "filepath"],
+            "required": ["filepath"],
+        },
+    },
+    {
+        "name": "git_diff",
+        "description": "Show git diff of modified files in the repository.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filepath": {"type": "string", "description": "Optional file path to diff."},
+            },
+        },
+    },
+    {
+        "name": "git_status",
+        "description": "Show git status of the repository.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
 ]
 
 
-def execute_run_command(tool_input: dict[str, Any]) -> str:
-    """Run a shell command inside the repository directory."""
-    command = tool_input["command"]
-    repo = tool_input["repo"]
-    timeout = min(int(tool_input.get("timeout", 60)), 300)
+def execute_run_command(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    cmd_str = tool_input.get("command", "")
+    timeout = float(tool_input.get("timeout", 30))
 
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
+    if not cmd_str:
+        return "Error: 'command' parameter is required."
 
-    logger.info("Executing in %s: %s", repo_path, command)
-    try:
-        proc = subprocess.run(
-            command,
-            cwd=str(repo_path),
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        output_parts = [f"Exit code: {proc.returncode}"]
-        if proc.stdout:
-            stdout_text = proc.stdout.strip()
-            if len(stdout_text) > 4000:
-                stdout_text = stdout_text[:3900] + "\n... [truncated]"
-            output_parts.append(f"STDOUT:\n{stdout_text}")
-        if proc.stderr:
-            stderr_text = proc.stderr.strip()
-            if len(stderr_text) > 4000:
-                stderr_text = stderr_text[:3900] + "\n... [truncated]"
-            output_parts.append(f"STDERR:\n{stderr_text}")
+    if sys.platform == "win32":
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd_str]
+    else:
+        cmd = ["/bin/sh", "-c", cmd_str]
 
-        if not proc.stdout and not proc.stderr:
-            output_parts.append("(Command produced no output)")
-
-        return "\n\n".join(output_parts)
-    except subprocess.TimeoutExpired:
-        return f"Command timed out after {timeout} seconds."
-    except Exception as e:
-        return f"Error executing command: {e}"
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=timeout)
+    out = []
+    if res.stdout:
+        out.append(f"STDOUT:\n{res.stdout}")
+    if res.stderr:
+        out.append(f"STDERR:\n{res.stderr}")
+    out.append(f"Exit code: {res.exit_code}")
+    out.append(f"Exit Code: {res.exit_code}")
+    if res.timed_out:
+        out.append("Status: Timed out and killed")
+    return "\n".join(out)
 
 
-def execute_git_diff(tool_input: dict[str, Any]) -> str:
-    """Inspect git diff in the repository."""
-    repo = tool_input["repo"]
+def execute_check_syntax(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
+
+    target = root / filepath
+    if not target.exists():
+        return f"Error: File not found: {filepath}"
+
+    cmd = [sys.executable, "-m", "py_compile", str(target)]
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=10)
+    if res.exit_code == 0:
+        return f"Syntax valid: {filepath}"
+    return f"SyntaxError in {filepath}:\n{res.stderr or res.stdout}"
+
+
+def execute_git_diff(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
     filepath = tool_input.get("filepath")
-
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
-
     cmd = ["git", "diff"]
     if filepath:
-        cmd.append(filepath)
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        diff = proc.stdout.strip()
-        if not diff:
-            return "No git diff detected (working tree is clean)."
-        if len(diff) > 5000:
-            diff = diff[:4900] + "\n... [truncated]"
-        return diff
-    except Exception as e:
-        return f"Error running git diff: {e}"
+        cmd.append(filepath.lstrip("/\\"))
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=15)
+    return res.stdout if res.stdout else "No changes detected (clean working tree)."
 
 
-def execute_git_status(tool_input: dict[str, Any]) -> str:
-    """Inspect git status in the repository."""
-    repo = tool_input["repo"]
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
-
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--short"],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        status = proc.stdout.strip()
-        return status if status else "Working tree clean (nothing to commit)."
-    except Exception as e:
-        return f"Error running git status: {e}"
-
-
-def execute_check_syntax(tool_input: dict[str, Any]) -> str:
-    """Check syntax of code/config files without running them."""
-    repo = tool_input.get("repo", "")
-    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
-    if not repo or not filepath:
-        return "Error: 'repo' and 'filepath' parameters are required."
-
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
-
-    target = repo_path / filepath
-    if not target.is_file():
-        return f"File not found: {filepath}"
-
-    suffix = target.suffix.lower()
-    try:
-        content = target.read_text(encoding="utf-8")
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-    if suffix == ".py":
-        try:
-            ast.parse(content, filename=filepath)
-            return f"Syntax valid for Python file: {filepath}"
-        except SyntaxError as e:
-            return f"Python SyntaxError in {filepath}:{e.lineno}: {e.msg}\n  {e.text or ''}"
-
-    if suffix == ".json":
-        try:
-            json.loads(content)
-            return f"Syntax valid for JSON file: {filepath}"
-        except json.JSONDecodeError as e:
-            return f"JSONDecodeError in {filepath}:{e.lineno}: {e.msg}"
-
-    return f"Syntax check not supported for '{suffix}' files."
+def execute_git_status(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    cmd = ["git", "status", "--short"]
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=10)
+    return res.stdout if res.stdout else "Clean working tree (no changes)."

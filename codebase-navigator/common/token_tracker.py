@@ -1,14 +1,64 @@
 """
-Gemini Token Tracker
-Tracks prompt, candidate, and total tokens across agent turns and writes cumulative stats.
+Gemini Token Tracker and Execution Guard.
+Tracks prompt, candidate, and total tokens across agent turns.
+Provides ExecutionGuard circuit breaker against infinite tool loops and budget overruns.
 """
 
 import csv
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from rich.console import Console
 from rich.table import Table
+
+
+class BudgetExceededError(Exception):
+    """Raised when token consumption exceeds configured budget ceiling."""
+    pass
+
+
+class InfiniteLoopError(Exception):
+    """Raised when an agent repeatedly executes identical tool calls."""
+    pass
+
+
+class ExecutionGuard:
+    """
+    Guards the agent loop against runaway spend and infinite tool loops.
+    Enforces per-ticket token limits and state-hash deduplication.
+    """
+
+    def __init__(self, max_tokens: int = 50_000, max_identical_calls: int = 3):
+        self.max_tokens = max_tokens
+        self.max_identical_calls = max_identical_calls
+        self.total_tokens = 0
+        self._call_counts: dict[str, int] = {}
+
+    def record_tokens(self, prompt_tokens: int, completion_tokens: int) -> None:
+        """Accumulate token spend and trip circuit breaker if ceiling exceeded."""
+        self.total_tokens += prompt_tokens + completion_tokens
+        if self.total_tokens > self.max_tokens:
+            raise BudgetExceededError(
+                f"Token budget exceeded: used {self.total_tokens} / {self.max_tokens} tokens."
+            )
+
+    def record_tool_call(self, tool_name: str, tool_args: dict) -> None:
+        """Track tool-call signature hash; trip circuit breaker on repeated calls."""
+        canonical = json.dumps({"tool": tool_name, "args": tool_args}, sort_keys=True)
+        signature = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        self._call_counts[signature] = self._call_counts.get(signature, 0) + 1
+
+        if self._call_counts[signature] >= self.max_identical_calls:
+            raise InfiniteLoopError(
+                f"Circuit breaker tripped: tool '{tool_name}' called {self.max_identical_calls} "
+                f"times with identical arguments {tool_args}."
+            )
+
+    def reset_call_counts(self) -> None:
+        """Reset tool call tracking for a new turn or ticket."""
+        self._call_counts.clear()
 
 
 class GeminiTokenTracker:

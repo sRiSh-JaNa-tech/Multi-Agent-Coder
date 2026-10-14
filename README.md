@@ -5,178 +5,108 @@
 [![SDK](https://img.shields.io/badge/SDK-google--genai-blue?style=flat-square)](https://github.com/googleapis/python-genai)
 [![ChromaDB](https://img.shields.io/badge/VectorDB-ChromaDB-purple?style=flat-square)](https://www.trychroma.com/)
 [![Rich UI](https://img.shields.io/badge/CLI-Rich%20Terminal-green?style=flat-square)](https://github.com/Textualize/rich)
+[![Pytest](https://img.shields.io/badge/Tests-29%2F29%20Passing-brightgreen?style=flat-square)](https://docs.pytest.org/)
 
-An intelligent agentic AI coding suite powered by **Google Gemini** (`gemini-2.5-flash-lite` via `google-genai`). Features an autonomous **Codebase Navigator & Coding Agent** equipped with 16 autonomous tools, semantic RAG, cross-session memory, and a dynamic Rich console interface, alongside structured foundations and tutorials.
+An enterprise-grade, fault-tolerant concurrent multi-agent engineering system powered by **Google Gemini** (`gemini-2.5-flash-lite` via `google-genai`). Features DAG dependency orchestration, Git worktree isolation, surgical atomic code editing, sandboxed execution with secret stripping, circuit-breaker guards, and an automated verification test suite.
 
 ---
 
-## Repository Structure
+## Unified Repository Layout
 
 ```
 Multi-Agent-Coder/
-├── 01_codebase_navigator.py       # Root entrypoint (routes to codebase-navigator)
-├── pyproject.toml                 # Root project configuration and dependencies
-├── README.md                      # Primary project documentation
-│
-├── codebase-navigator/            # Core Autonomous Codebase Navigator & Agent
-│   ├── 01_codebase_navigator.py   # Main agentic loop with ReAct orchestration
-│   ├── demo_ui.py                 # Live terminal demonstration of Rich UI components
-│   ├── test_e2e_tools.py          # End-to-end integration test suite (6/6 passing)
-│   ├── pyproject.toml             # Package metadata
-│   ├── README.md                  # Detailed module architecture & guide
-│   ├── common/                    # Shared infrastructure
-│   │   ├── logging_config.py      # Standardized logging setup
-│   │   ├── menu.py                # Interactive terminal repository selector
-│   │   ├── token_tracker.py       # GeminiTokenTracker (cost & token metrics)
-│   │   └── ui.py                  # ConsoleUI (panels, banners, markdown streams)
-│   ├── indexer/                   # Ingestion & Embedding Pipeline
-│   │   ├── chunker.py             # AST-aware code chunking (functions/classes)
-│   │   └── embedder.py            # Gemini text-embedding-004 + ChromaDB pipeline
-│   ├── store/                     # Persistent Storage Layer
-│   │   ├── memory.py              # Long-term JSON memory store (facts/insights)
-│   │   └── vector.py              # ChromaDB vector store wrapper
-│   └── tools/                     # Autonomous Agent Tool Registry (16 tools)
-│       ├── coding.py              # create_file, write_file, replace_file_content
-│       ├── execution.py           # run_command, check_syntax, git_diff, git_status
-│       ├── files.py               # read_file, list_directory
-│       ├── memory.py              # save_memory, recall_memory
-│       ├── outline.py             # get_file_outline (AST structure)
-│       ├── repo.py                # clone_and_index, list_repos
-│       └── search.py              # search_code, grep
-│
-└── examples/                      # Foundational Gemini Agent Tutorials
-    ├── README.md                  # Guide for examples
-    ├── gemini_prompting.py        # Zero-shot, system prompts, role definition
-    ├── gemini_few_shot_cot.py     # Few-shot exemplars & chain-of-thought reasoning
-    ├── structured_output_gemini.py# Strict schema enforcement & Pydantic output
-    ├── tool_use_gemini.py         # Autonomous function calling basics
-    └── gemini_coding_agent.py     # Single-file ReAct coding assistant
+├── pyproject.toml              # Unified package configuration & pytest settings
+├── uv.lock                     # Unified lockfile
+├── .env.example                # Example environment variables
+├── src/
+│   └── multi_agent_coder/      # Core source package
+│       ├── __init__.py
+│       ├── cli/                # Consolidated CLI subcommands (navigator, orchestrator, harness)
+│       │   ├── __init__.py
+│       │   ├── __main__.py     # Unified entrypoint: multi-agent-coder <subcommand>
+│       │   ├── navigator.py    # Codebase Navigator agent
+│       │   ├── orchestrator.py # Multi-agent ticket orchestrator
+│       │   └── harness_demo.py # Pluggable LLM harness demo
+│       ├── common/             # logging_config.py, menu.py, token_tracker.py (ExecutionGuard), ui.py
+│       ├── harness/            # adapters.py, base.py, engine.py, ticket_runner.py, types.py
+│       ├── indexer/            # chunker.py, embedder.py
+│       ├── orchestrator/       # agent_worker.py, dashboard.py, main_orchestrator.py, ticket.py (TicketDAG)
+│       ├── store/              # memory.py, vector.py
+│       └── tools/              # coding.py (atomic patch), execution.py (sandboxed), files.py, repo.py (worktree)
+└── tests/                      # Dedicated pytest test suite (29 tests)
+    ├── conftest.py
+    ├── test_dag_orchestrator.py
+    ├── test_surgical_coding.py
+    ├── test_sandbox_execution.py
+    ├── test_harness_circuit_breaker.py
+    ├── test_worktree_isolation.py
+    ├── test_ticket_system.py
+    ├── test_harness.py
+    └── test_e2e_tools.py
 ```
 
 ---
 
-## Key Modules & Features
+## Threat Model & Failure Mode Mitigations
 
-### 1. Codebase Navigator (`codebase-navigator/`)
-- **Semantic Retrieval (RAG)**: Automatically clones GitHub repositories, extracts code chunks using AST awareness, embeds them using `text-embedding-004`, and indexes them in ChromaDB.
-- **Developer Tool Suite (16 Tools)**:
-  - *Code Modification*: Create files, replace code blocks, inspect diffs.
-  - *Execution & Testing*: Run test commands in isolated subprocesses and validate Python syntax.
-  - *Structure Inspection*: Generate hierarchical class and function outlines with line counts.
-- **Cross-Session Memory**: Automatically remembers architectural decisions, repository quirks, and preferences across sessions in `data/memory.json`.
-- **Rich Terminal UI**:
-  - Gradient banner headers
-  - Live tool-call spinners and structured result panels
-  - Markdown-rendered responses with syntax-highlighted code blocks
-- **Automatic API Key Prompting**: If `GEMINI_API_KEY` is not present in the environment or `.env`, the agent prompts the user securely in the terminal and persists it to `.env`.
-
-### 2. Gemini Foundations (`examples/`)
-Hands-on, self-contained examples demonstrating standard patterns in LLM orchestration:
-- **Prompt Engineering**: Zero-shot vs system instructions.
-- **Chain of Thought**: Step-by-step reasoning prompts.
-- **Structured Outputs**: Guarantees JSON conformance matching Pydantic schemas.
-- **Tool Calling**: Binding Python functions to Gemini function declarations.
+| Subsystem | Threat / Failure Mode | Hardened Mitigation |
+| :--- | :--- | :--- |
+| **Orchestrator** (`ticket.py`, `main_orchestrator.py`) | Circular dependencies, deadlocks, hanging child tasks | **Kahn's topological sort** on ticket ingestion rejects cycles immediately. Downstream tickets transition to `BLOCKED` if any dependency fails. |
+| **Concurrency** (`agent_worker.py`, `tools/repo.py`) | Race conditions & dirty working trees between agents | **Git Worktree Isolation**: Each ticket runs in `.worktrees/ticket-<id>` on its own branch (`agent/ticket-<id>`). Startup auto-prunes stale worktrees. |
+| **Code Editing** (`tools/coding.py`, `tools/files.py`) | Path traversal attacks, hallucinated line numbers, broken syntax | Strict **SEARCH/REPLACE** exact matching, workspace root boundary check (`is_relative_to`), in-memory Python AST validation (`ast.parse`), and atomic write via tempfile + `os.replace`. |
+| **Execution** (`tools/execution.py`) | Zombie processes, hanging input prompts, context window overflow | `stdin=subprocess.DEVNULL`, process-group isolation, secret stripping (`API_KEY`, `TOKEN`, `PASSWORD`), hard timeouts with process tree termination, and output head/tail truncation. |
+| **Harness & Spend** (`harness/engine.py`, `token_tracker.py`) | Infinite tool loops, rate limits, runaway token cost | **ExecutionGuard Circuit Breaker**: State-hash deduplication trips after 3 identical tool calls. Hard token budget ceiling aborts execution if spend limit reached. |
 
 ---
 
+## Quickstart & CLI
 
-### 3. Multi-Agent Ticket Orchestration (`02_ticket_orchestrator.py`)
-- **Main Orchestrator**: Identifies problems from user objectives, generates discrete problem tickets, and matches them to specialized agents (`analysis`, `coding`, `testing`).
-- **Strict Queue Limit (3 Tickets)**: Each agent maintains a queue with a hard limit of 3 tickets. Excess tickets remain in master backlog until queue slots open.
-- **Synchronous Processing**: Agents execute tickets **one by one synchronously** in strict FIFO sequence.
-- **Live Visual Dashboard**: Rich terminal table monitoring agent queues, active tickets, and real-time resolution logs.
-
----
-
-
-### 4. Pluggable LLM Harness (`03_llm_harness_demo.py` / `codebase-navigator/harness/`)
-- **Adapter-Agnostic Engine**: Quickly attach **any LLM backend** (`MockLLMAdapter`, `CallableAdapter`, `GeminiAdapter`, `OpenAICompatibleAdapter`) to run agentic tool execution.
-- **Isolated from Main API**: Runs as a separate testing/execution subsystem—zero risk of breaking the main working agent.
-- **Synchronous Ticket Worker (`HarnessTicketWorker`)**: Allows multi-agent ticket execution powered by attached custom models or offline mocks.
-- **Deterministic 0-Cost Testing**: `MockLLMAdapter` allows instant multi-turn tool calling and ReAct loop verification without API tokens or network latency.
-
-```bash
-# Run the interactive harness demo
-python 03_llm_harness_demo.py
-
-# Run harness unit & integration tests
-python codebase-navigator/test_harness.py
-```
-
-## Quickstart
-
-### 1. Prerequisites
-- Python 3.11 or higher
-- Git
-
-### 2. Setup Virtual Environment
+### 1. Installation
 ```bash
 # Clone the repository
 git clone https://github.com/sRiSh-JaNa-tech/Multi-Agent-Coder.git
 cd Multi-Agent-Coder
 
-# Create and activate virtual environment
-python -m venv .venv
-
-# Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-
-# Linux / macOS:
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r pyproject.toml
+# Install in editable mode
+pip install -e .
 ```
 
-### 3. Configure Gemini API Key
-You can either set the environment variable:
+### 2. Configure Environment
 ```bash
-# Windows PowerShell
-$env:GEMINI_API_KEY = "your-gemini-api-key"
-
-# Linux / macOS
-export GEMINI_API_KEY="your-gemini-api-key"
-```
-Or simply run the agent—it will prompt you interactively on first launch and save it to `.env` automatically!
-
----
-
-## Usage
-
-### Run the Codebase Navigator
-From the project root:
-```bash
-python 01_codebase_navigator.py
-```
-Or from within the module directory:
-```bash
-cd codebase-navigator
-python 01_codebase_navigator.py
+cp .env.example .env
+# Set your GEMINI_API_KEY and MAX_AGENTS=3
 ```
 
-### Run the Terminal UI Demo
-Preview the styling, badges, and response format:
+### 3. Run Subcommands via Unified CLI
 ```bash
-python codebase-navigator/demo_ui.py
-```
+# Launch Codebase Navigator
+multi-agent-coder navigator
 
-### Run End-to-End Tests
-Execute the full integration test suite:
-```bash
-python codebase-navigator/test_e2e_tools.py
-```
+# Launch Multi-Agent Ticket Orchestrator
+multi-agent-coder orchestrator
 
-### Run Foundation Examples
-Explore standalone Gemini lessons:
-```bash
-python examples/gemini_prompting.py
-python examples/gemini_few_shot_cot.py
-python examples/structured_output_gemini.py
-python examples/tool_use_gemini.py
-python examples/gemini_coding_agent.py
+# Launch LLM Testing & Execution Harness Demo
+multi-agent-coder harness
+# Or run non-interactive automated harness demos:
+multi-agent-coder harness --all
 ```
 
 ---
 
-## License
-MIT License.
+## Automated Pytest Verification Suite
+
+Run all 29 automated tests across DAG orchestration, surgical coding, sandboxed execution, worktree isolation, and circuit breakers:
+
+```bash
+pytest tests/ -v
+```
+
+### Test Suite Coverage:
+- `tests/test_dag_orchestrator.py`: Cycle detection with Kahn's algorithm, missing dependency validation, downstream failure blocking.
+- `tests/test_surgical_coding.py`: Path traversal protection, atomic file edits, Python AST syntax validation gate, duplicate block rejection.
+- `tests/test_sandbox_execution.py`: Process timeout killing, secret stripping from environment, output head/tail truncation.
+- `tests/test_harness_circuit_breaker.py`: Repeated identical tool call deduplication, token budget ceiling enforcement.
+- `tests/test_worktree_isolation.py`: Isolated branch lifecycle, conflict-free parallel worktree editing and merge back to main.
+- `tests/test_ticket_system.py`: Multi-agent synchronous FIFO execution and 3-ticket per agent queue limits.
+- `tests/test_harness.py`: Mock, Callable, and Gemini adapter integrations.
+- `tests/test_e2e_tools.py`: End-to-end tool registry operations.

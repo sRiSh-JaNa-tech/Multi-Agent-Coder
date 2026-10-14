@@ -1,13 +1,14 @@
 """
 Harness Agent Execution Engine.
-Autonomous ReAct loop that executes tasks using an attached BaseLLMAdapter
-and a pluggable tool registry.
+Autonomous ReAct loop that executes tasks using an attached BaseLLMAdapter,
+a pluggable tool registry, and an ExecutionGuard circuit breaker.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
 import time
+from typing import Any, Callable
 
+from common.token_tracker import ExecutionGuard, BudgetExceededError, InfiniteLoopError
 from .base import BaseLLMAdapter
 from .types import Message, ToolCall, ToolResult, TokenUsage, LLMResponse
 
@@ -48,6 +49,7 @@ class HarnessAgent:
     """
     Autonomous ReAct agent decoupled from any specific LLM provider.
     Can be attached to Gemini, Mock, OpenAI, or custom function adapters.
+    Equipped with an ExecutionGuard circuit breaker for token spend and duplicate calls.
     """
 
     def __init__(
@@ -58,6 +60,7 @@ class HarnessAgent:
         system_instruction: str = DEFAULT_SYSTEM_INSTRUCTION,
         max_iterations: int = 10,
         console: Any | None = None,
+        guard: ExecutionGuard | None = None,
     ):
         self.adapter = adapter
         self.tool_declarations = tool_declarations or []
@@ -65,6 +68,7 @@ class HarnessAgent:
         self.system_instruction = system_instruction
         self.max_iterations = max_iterations
         self.console = console
+        self.guard = guard or ExecutionGuard()
         self.conversation_history: list[Message] = []
         self.total_usage = TokenUsage()
 
@@ -77,6 +81,7 @@ class HarnessAgent:
     def run(self, prompt: str) -> AgentRunResult:
         """
         Execute an autonomous ReAct loop on the provided user prompt.
+        Guarded against infinite tool loops and budget overruns.
         """
         self.conversation_history.append(Message(role="user", content=prompt))
         steps: list[AgentStep] = []
@@ -99,6 +104,26 @@ class HarnessAgent:
                 err_msg = f"LLM generation failed: {e}"
                 if self.console:
                     self.console.print(f"[bold red]Adapter Error:[/bold red] {err_msg}")
+                return AgentRunResult(
+                    final_answer="",
+                    steps=steps,
+                    total_usage=self.total_usage,
+                    tools_invoked=tools_invoked,
+                    success=False,
+                    iterations=iteration,
+                    error=err_msg,
+                )
+
+            # Check and record tokens in ExecutionGuard
+            try:
+                self.guard.record_tokens(
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                )
+            except BudgetExceededError as e:
+                err_msg = f"ExecutionGuard tripped: {e}"
+                if self.console:
+                    self.console.print(f"[bold red]{err_msg}[/bold red]")
                 return AgentRunResult(
                     final_answer="",
                     steps=steps,
@@ -135,6 +160,23 @@ class HarnessAgent:
 
                 tool_results: list[ToolResult] = []
                 for call in response.tool_calls:
+                    # Guard against repeated identical tool calls
+                    try:
+                        self.guard.record_tool_call(call.name, call.args)
+                    except InfiniteLoopError as e:
+                        err_msg = f"ExecutionGuard tripped: {e}"
+                        if self.console:
+                            self.console.print(f"[bold red]{err_msg}[/bold red]")
+                        return AgentRunResult(
+                            final_answer="",
+                            steps=steps,
+                            total_usage=self.total_usage,
+                            tools_invoked=tools_invoked,
+                            success=False,
+                            iterations=iteration,
+                            error=err_msg,
+                        )
+
                     tools_invoked.append(call.name)
                     tool_fn = self.tool_registry.get(call.name)
 
@@ -195,10 +237,10 @@ class HarnessAgent:
         root_dir: str = ".",
         console: Any | None = None,
         max_iterations: int = 10,
+        guard: ExecutionGuard | None = None,
     ) -> "HarnessAgent":
         """
-        Factory to instantiate a HarnessAgent wired with the codebase tools.
-        Decoupled from the main agent implementation.
+        Factory to instantiate a HarnessAgent wired with the codebase tools and ExecutionGuard.
         """
         from tools import (
             FILE_TOOLS,
@@ -235,7 +277,7 @@ class HarnessAgent:
             if not kwargs.get("repo"):
                 kwargs["repo"] = root_dir
             if not kwargs.get("path") and kwargs.get("dir_path"):
-                kwargs["path"] = kwargs["dir_path"]
+                kwargs["path"] = kwargs.get("dir_path")
             return execute_list_directory(None, kwargs)
 
         registry = {
@@ -258,4 +300,5 @@ class HarnessAgent:
             tool_registry=registry,
             console=console,
             max_iterations=max_iterations,
+            guard=guard,
         )

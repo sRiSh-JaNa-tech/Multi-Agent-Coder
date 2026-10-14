@@ -1,187 +1,197 @@
 """
 Coding Tools
-
-Tools for creating, modifying, and patching files within repository workspaces.
-Used by the Coder and Orchestrator agents.
+Tools for precision file creation, atomic search-and-replace patching, and code editing.
+Includes syntax validation gate and path traversal protection.
 """
 
+import ast
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
-from tools.repo import find_repo_path
 from common.logging_config import setup_logging
 
 logger = setup_logging(__name__)
 
+
+class PatchError(Exception):
+    """Raised when atomic search/replace patch fails validation."""
+    pass
+
+
+def resolve_safe_path(workspace_root: Path, relative_path: str) -> Path:
+    """
+    Resolve and validate a relative path against workspace root.
+    Guards against path traversal attacks (e.g., ../../etc/passwd).
+    """
+    root = workspace_root.resolve()
+    target = (root / relative_path).resolve()
+    if not target.is_relative_to(root):
+        raise PermissionError(f"Path traversal blocked: '{relative_path}' escapes workspace root.")
+    return target
+
+
+def apply_search_replace(
+    workspace_root: Path,
+    relative_path: str,
+    search_block: str,
+    replace_block: str,
+) -> str:
+    """
+    Surgically replace a unique search block with replacement content.
+    Enforces path sandboxing, unique match constraint, in-memory Python AST
+    syntax verification, and atomic file replacement via tempfile + os.replace.
+    """
+    target = resolve_safe_path(workspace_root, relative_path)
+    if not target.exists():
+        raise FileNotFoundError(f"Target file does not exist: {relative_path}")
+
+    original_content = target.read_text(encoding="utf-8")
+    occurrences = original_content.count(search_block)
+
+    if occurrences == 0:
+        raise PatchError(f"SEARCH block not found in {relative_path}. Ensure exact whitespace match.")
+    if occurrences > 1:
+        raise PatchError(
+            f"Ambiguous SEARCH block: found {occurrences} matches in {relative_path}. Include more surrounding context."
+        )
+
+    updated_content = original_content.replace(search_block, replace_block, 1)
+
+    # Syntax gate for Python files before touching disk
+    if target.suffix == ".py":
+        try:
+            ast.parse(updated_content, filename=relative_path)
+        except SyntaxError as exc:
+            raise PatchError(f"Rejected edit: introduces SyntaxError at line {exc.lineno}: {exc.msg}") from exc
+
+    # Atomic write via temporary file in the same directory
+    fd, tmp_path = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(updated_content)
+        os.replace(tmp_path, target)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        raise
+
+    return f"Successfully patched {relative_path}"
+
+
+def _get_target_root(tool_input: dict[str, Any], workspace_root: Path | None = None) -> Path:
+    if workspace_root:
+        return workspace_root
+    repo = tool_input.get("repo")
+    if repo:
+        p = Path(repo).expanduser()
+        if p.is_dir():
+            return p
+        try:
+            from .repo import find_repo_path
+            found = find_repo_path(repo)
+            if found:
+                return found
+        except Exception:
+            pass
+    return Path.cwd()
+
+
 CODING_TOOLS = [
     {
         "name": "create_file",
-        "description": "Create a new file in a repository with given content. Fails if file already exists.",
+        "description": "Create a new file in the repository with the specified content. Fails if file exists.",
         "parameters": {
             "type": "object",
             "properties": {
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path (e.g., 'pallets-flask')",
-                },
-                "filepath": {
-                    "type": "string",
-                    "description": "Relative path for the new file (e.g., 'src/flask/feature.py')",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Complete text content for the new file",
-                },
+                "filepath": {"type": "string", "description": "Relative file path."},
+                "content": {"type": "string", "description": "Full file content."},
             },
-            "required": ["repo", "filepath", "content"],
+            "required": ["filepath", "content"],
         },
     },
     {
         "name": "write_file",
-        "description": "Write or overwrite the full content of a file in a repository.",
+        "description": "Write or overwrite a file in the repository with the specified content.",
         "parameters": {
             "type": "object",
             "properties": {
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path",
-                },
-                "filepath": {
-                    "type": "string",
-                    "description": "Relative path to the file to write or overwrite",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Complete text content to write into the file",
-                },
+                "filepath": {"type": "string", "description": "Relative file path."},
+                "content": {"type": "string", "description": "Full file content."},
             },
-            "required": ["repo", "filepath", "content"],
+            "required": ["filepath", "content"],
         },
     },
     {
         "name": "replace_file_content",
-        "description": (
-            "Surgically replace a unique block of text within an existing file. "
-            "Target content must match uniquely in the file."
-        ),
+        "description": "Surgically replace an exact block of code in a file with new code.",
         "parameters": {
             "type": "object",
             "properties": {
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name or path",
-                },
-                "filepath": {
-                    "type": "string",
-                    "description": "Relative path to the file",
-                },
-                "target_content": {
-                    "type": "string",
-                    "description": "Exact text block to find and replace (must be unique)",
-                },
-                "replacement_content": {
-                    "type": "string",
-                    "description": "New text block to insert in place of target_content",
-                },
+                "filepath": {"type": "string", "description": "Relative file path."},
+                "target_content": {"type": "string", "description": "The exact block of code to find and replace."},
+                "replacement_content": {"type": "string", "description": "The new replacement content."},
             },
-            "required": ["repo", "filepath", "target_content", "replacement_content"],
+            "required": ["filepath", "target_content", "replacement_content"],
         },
     },
 ]
 
 
-def execute_create_file(tool_input: dict[str, Any]) -> str:
-    """Create a new file with parent directories."""
-    repo = tool_input.get("repo", "")
-    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+def execute_create_file(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
     content = tool_input.get("content", "")
-    if not repo or not filepath:
-        return "Error: 'repo' and 'filepath' parameters are required."
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
 
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
+    try:
+        target = resolve_safe_path(root, filepath)
+    except PermissionError as e:
+        return f"Error: {e}"
 
-    target = repo_path / filepath
     if target.exists():
-        return f"File already exists: {filepath}. Use write_file or replace_file_content instead."
+        return f"Error: File already exists at {filepath}. Use replace_file_content or write_file."
 
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        lines = content.count("\n") + 1
-        logger.info("Created %s in %s (%d lines)", filepath, repo, lines)
-        return f"Successfully created {filepath} ({lines} lines)."
-    except Exception as e:
-        logger.error("Failed to create %s: %s", filepath, e)
-        return f"Error creating file {filepath}: {e}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return f"Successfully created {filepath} ({len(content.splitlines())} lines)"
 
 
-def execute_write_file(tool_input: dict[str, Any]) -> str:
-    """Write or overwrite file contents."""
-    repo = tool_input.get("repo", "")
-    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
+def execute_write_file(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
     content = tool_input.get("content", "")
-    if not repo or not filepath:
-        return "Error: 'repo' and 'filepath' parameters are required."
-
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
-
-    target = repo_path / filepath
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        existed = target.exists()
-        target.write_text(content, encoding="utf-8")
-        lines = content.count("\n") + 1
-        action = "Updated" if existed else "Created"
-        logger.info("%s %s in %s (%d lines)", action, filepath, repo, lines)
-        return f"Successfully {action.lower()} {filepath} ({lines} lines)."
-    except Exception as e:
-        logger.error("Failed to write %s: %s", filepath, e)
-        return f"Error writing file {filepath}: {e}"
-
-
-def execute_replace_file_content(tool_input: dict[str, Any]) -> str:
-    """Perform surgical text replacement."""
-    repo = tool_input.get("repo", "")
-    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
-    target_content = tool_input.get("target_content", "")
-    replacement_content = tool_input.get("replacement_content", "")
-    if not repo or not filepath:
-        return "Error: 'repo' and 'filepath' parameters are required."
-
-    repo_path = find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found."
-
-    target = repo_path / filepath
-    if not target.is_file():
-        return f"File not found: {filepath} in {repo}"
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
 
     try:
-        original = target.read_text(encoding="utf-8")
-    except Exception as e:
-        return f"Error reading {filepath}: {e}"
+        target = resolve_safe_path(root, filepath)
+    except PermissionError as e:
+        return f"Error: {e}"
 
-    occurrences = original.count(target_content)
-    if occurrences == 0:
-        return (
-            f"Target content not found in {filepath}. "
-            "Ensure indentation, spaces, and line breaks match exactly."
-        )
-    if occurrences > 1:
-        return (
-            f"Target content appears {occurrences} times in {filepath}. "
-            "Please include more surrounding context lines to make the target block unique."
-        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return f"Successfully updated {filepath} ({len(content.splitlines())} lines)"
 
-    updated = original.replace(target_content, replacement_content, 1)
+
+def execute_replace_file_content(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
+    target_content = tool_input.get("target_content") or tool_input.get("search_block") or ""
+    replacement_content = tool_input.get("replacement_content") or tool_input.get("replace_block") or ""
+
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
+    if not target_content:
+        return "Error: 'target_content' parameter is required."
+
     try:
-        target.write_text(updated, encoding="utf-8")
-        logger.info("Replaced unique block in %s in %s", filepath, repo)
-        return f"Successfully updated {filepath}."
-    except Exception as e:
-        logger.error("Failed to save changes to %s: %s", filepath, e)
-        return f"Error updating file {filepath}: {e}"
+        apply_search_replace(root, filepath, target_content, replacement_content)
+        return f"Successfully updated {filepath}"
+    except (PatchError, PermissionError, FileNotFoundError) as e:
+        return f"Error: {e}"

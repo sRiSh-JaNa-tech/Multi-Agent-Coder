@@ -165,3 +165,73 @@ def execute_list_repos(vector_store: VectorStore, _tool_input: dict[str, Any]) -
     for c in collections:
         lines.append(f"  - {c['name']}: {c['chunks']} chunks")
     return "\n".join(lines)
+
+
+# -- Git Worktree Isolation Manager -----------------------------------------
+
+def create_worktree(repo_dir: Path, ticket_id: str) -> Path:
+    """
+    Create an isolated git worktree for a ticket on a dedicated branch.
+    Guarantees agents do not corrupt the working tree or dirty each other's files.
+    """
+    repo = repo_dir.resolve()
+    worktree_path = repo / ".worktrees" / f"ticket-{ticket_id.lower()}"
+    branch_name = f"agent/ticket-{ticket_id.lower()}"
+
+    # Ensure parent directory exists
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Prune stale worktrees first
+    prune_worktrees(repo)
+
+    # If worktree already exists, remove it cleanly
+    if worktree_path.exists():
+        remove_worktree(repo, ticket_id)
+
+    # Create worktree with dedicated branch
+    cmd = ["git", "worktree", "add", "-B", branch_name, str(worktree_path)]
+    subprocess.run(cmd, cwd=str(repo), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return worktree_path
+
+
+def remove_worktree(repo_dir: Path, ticket_id: str) -> None:
+    """Safely remove a ticket worktree and prune metadata."""
+    repo = repo_dir.resolve()
+    worktree_path = repo / ".worktrees" / f"ticket-{ticket_id.lower()}"
+
+    if worktree_path.exists():
+        cmd = ["git", "worktree", "remove", "--force", str(worktree_path)]
+        subprocess.run(cmd, cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    prune_worktrees(repo)
+
+
+def merge_worktree(repo_dir: Path, ticket_id: str, target_branch: str = "main") -> None:
+    """
+    Merge the ticket worktree branch into the target branch.
+    Serializes changes cleanly back to main.
+    """
+    repo = repo_dir.resolve()
+    branch_name = f"agent/ticket-{ticket_id.lower()}"
+
+    # Commit any uncommitted changes in the worktree if present
+    worktree_path = repo / ".worktrees" / f"ticket-{ticket_id.lower()}"
+    if worktree_path.exists():
+        subprocess.run(["git", "add", "-A"], cwd=str(worktree_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(
+            ["git", "commit", "-m", f"Auto-commit ticket {ticket_id}"],
+            cwd=str(worktree_path),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    # Merge branch into target branch in repo_dir
+    subprocess.run(["git", "checkout", target_branch], cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    cmd = ["git", "merge", branch_name, "-m", f"Merge ticket {ticket_id}"]
+    subprocess.run(cmd, cwd=str(repo), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def prune_worktrees(repo_dir: Path) -> None:
+    """Prune stale git worktrees."""
+    repo = repo_dir.resolve()
+    cmd = ["git", "worktree", "prune"]
+    subprocess.run(cmd, cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
