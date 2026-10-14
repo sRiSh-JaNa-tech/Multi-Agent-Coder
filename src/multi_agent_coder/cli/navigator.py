@@ -118,11 +118,16 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
 def ensure_api_key(console: Console | None = None, force_prompt: bool = False) -> str:
     """Ensure a valid GEMINI_API_KEY is available in environment or prompt the user."""
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if api_key and not force_prompt:
+    if api_key and not force_prompt and not api_key.startswith("AQ."):
         return api_key
 
     _console = console or Console()
-    reason = "The current GEMINI_API_KEY was rejected by Google (API_KEY_INVALID)." if force_prompt else "GEMINI_API_KEY not found in environment or .env"
+    if api_key.startswith("AQ."):
+        reason = "The current GEMINI_API_KEY begins with 'AQ.', which is a Google OAuth/session token, NOT a Gemini API key."
+    elif force_prompt:
+        reason = "The current GEMINI_API_KEY was rejected by Google (401 UNAUTHENTICATED / Invalid Key)."
+    else:
+        reason = "GEMINI_API_KEY not found in environment or .env"
     _console.print(
         Panel(
             f"[bold yellow]{reason}[/bold yellow]\n\n"
@@ -306,8 +311,17 @@ class CodeNavigatorAgent:
                 )
             except Exception as e:
                 err_str = str(e)
-                if "API_KEY_INVALID" in err_str or "API key not valid" in err_str:
-                    logger.error("Invalid Gemini API key: %s", e)
+                auth_indicators = [
+                    "API_KEY_INVALID",
+                    "API key not valid",
+                    "UNAUTHENTICATED",
+                    "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+                    "401",
+                    "403",
+                    "invalid authentication",
+                ]
+                if any(k in err_str for k in auth_indicators):
+                    logger.error("Gemini authentication failure: %s", e)
                     new_key = ensure_api_key(console, force_prompt=True)
                     self.api_key = new_key
                     self.client = genai.Client(api_key=new_key)

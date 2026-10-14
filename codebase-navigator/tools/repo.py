@@ -147,7 +147,11 @@ def execute_clone_and_index(
         return f"No indexable files found in '{repo}'."
 
     # Embed and store
-    count = index_chunks(embedder, vector_store, collection_name, chunks)
+    try:
+        count = index_chunks(embedder, vector_store, collection_name, chunks)
+    except Exception as e:
+        logger.error("Failed to embed repository chunks: %s", e)
+        return f"Embedding failed for '{repo}': {e}. Please ensure your GEMINI_API_KEY is a valid AI Studio key (starts with AIzaSy)." 
 
     return (
         f"Indexed '{repo}': {len(files)} files, {count} chunks. "
