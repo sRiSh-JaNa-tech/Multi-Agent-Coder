@@ -114,18 +114,21 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
     return [{"function_declarations": all_tools}]
 
 
-def ensure_api_key(console: Console | None = None) -> str:
-    """Ensure GEMINI_API_KEY is available in environment or prompt the user."""
+def ensure_api_key(console: Console | None = None, force_prompt: bool = False) -> str:
+    """Ensure a valid GEMINI_API_KEY is available in environment or prompt the user."""
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if api_key:
+    if api_key and not force_prompt:
         return api_key
 
     _console = console or Console()
+    reason = "The current GEMINI_API_KEY was rejected by Google (API_KEY_INVALID)." if force_prompt else "GEMINI_API_KEY not found in environment or .env"
     _console.print(
         Panel(
-            "[bold yellow]GEMINI_API_KEY not found in environment or .env[/bold yellow]\n\n"
-            "Please enter your Google Gemini API key to proceed.",
-            title="API Key Required",
+            f"[bold yellow]{reason}[/bold yellow]\n\n"
+            "Please enter a valid Google Gemini API key to proceed.\n"
+            "You can generate one for free at: [cyan]https://aistudio.google.com/app/apikey[/cyan]\n"
+            "[dim](A valid Gemini API key typically starts with 'AIzaSy' and is 39 characters long)[/dim]",
+            title="Gemini API Key Required",
             border_style="yellow",
         )
     )
@@ -140,21 +143,21 @@ def ensure_api_key(console: Console | None = None) -> str:
 
             if entered_key:
                 os.environ["GEMINI_API_KEY"] = entered_key
-                
-                # Persist to .env in current folder if available
-                env_file = Path(".env")
-                try:
-                    if not env_file.exists():
-                        env_file.write_text(f"GEMINI_API_KEY={entered_key}\n", encoding="utf-8")
-                    else:
-                        cur = env_file.read_text(encoding="utf-8")
-                        if "GEMINI_API_KEY" not in cur:
-                            with env_file.open("a", encoding="utf-8") as ef:
-                                ef.write(f"\nGEMINI_API_KEY={entered_key}\n")
-                except Exception:
-                    pass
 
-                _console.print("[green]API key set successfully![/green]\n")
+                # Update .env in project paths
+                for env_path in [Path(".env"), Path("..") / ".env", Path(r"C:\Users\srish\Desktop\Multi-Coding-Agent\.env")]:
+                    try:
+                        if env_path.exists():
+                            lines = env_path.read_text(encoding="utf-8").splitlines()
+                            filtered = [l for l in lines if not l.startswith("GEMINI_API_KEY=")]
+                            filtered.append(f"GEMINI_API_KEY={entered_key}")
+                            env_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+                        else:
+                            env_path.write_text(f"GEMINI_API_KEY={entered_key}\n", encoding="utf-8")
+                    except Exception:
+                        pass
+
+                _console.print("[green]API key updated successfully![/green]\n")
                 return entered_key
             _console.print("[red]API key cannot be empty. Please enter a valid key.[/red]")
         except (KeyboardInterrupt, EOFError):
@@ -301,6 +304,13 @@ class CodeNavigatorAgent:
                     ),
                 )
             except Exception as e:
+                err_str = str(e)
+                if "API_KEY_INVALID" in err_str or "API key not valid" in err_str:
+                    logger.error("Invalid Gemini API key: %s", e)
+                    new_key = ensure_api_key(console, force_prompt=True)
+                    self.api_key = new_key
+                    self.client = genai.Client(api_key=new_key)
+                    continue
                 logger.error("Gemini API error: %s", e)
                 return f"API error: {e}"
 
