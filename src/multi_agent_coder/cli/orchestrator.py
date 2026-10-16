@@ -38,50 +38,6 @@ SUGGESTED_PROBLEMS = [
 ]
 
 
-def ensure_api_key(console: Console) -> str:
-    """Ensure GEMINI_API_KEY is available or prompt user."""
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if api_key:
-        return api_key
-
-    console.print(
-        Panel(
-            "[bold yellow]GEMINI_API_KEY not found in environment or .env[/bold yellow]\n\n"
-            "Please enter your Google Gemini API key to proceed.",
-            title="API Key Required",
-            border_style="yellow",
-        )
-    )
-
-    while True:
-        try:
-            if sys.stdin.isatty():
-                entered_key = Prompt.ask("[bold green]Enter your GEMINI_API_KEY[/bold green]", password=True).strip()
-            else:
-                console.print("[bold green]Enter your GEMINI_API_KEY:[/bold green] ", end="")
-                entered_key = sys.stdin.readline().strip()
-
-            if entered_key:
-                os.environ["GEMINI_API_KEY"] = entered_key
-                env_file = Path(".env")
-                try:
-                    if not env_file.exists():
-                        env_file.write_text(f"GEMINI_API_KEY={entered_key}\n", encoding="utf-8")
-                    else:
-                        cur = env_file.read_text(encoding="utf-8")
-                        if "GEMINI_API_KEY" not in cur:
-                            with env_file.open("a", encoding="utf-8") as ef:
-                                ef.write(f"\nGEMINI_API_KEY={entered_key}\n")
-                except Exception:
-                    pass
-
-                console.print("[green]API key set successfully![/green]\n")
-                return entered_key
-            console.print("[red]API key cannot be empty. Please enter a valid key.[/red]")
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Exiting: API key entry cancelled.[/yellow]")
-            raise SystemExit(0)
-
 
 def main() -> None:
     api_key = ensure_api_key(console)

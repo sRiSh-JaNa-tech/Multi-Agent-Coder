@@ -24,7 +24,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from common import GeminiTokenTracker, setup_logging
+from common import GeminiTokenTracker, setup_logging, ensure_api_key, validate_gemini_api_key
 from common.menu import interactive_menu
 from common.ui import ConsoleUI
 
