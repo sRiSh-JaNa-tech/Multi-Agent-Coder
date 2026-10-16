@@ -73,7 +73,7 @@ def main() -> None:
     console.print("\n[bold yellow]Step 1: Main Orchestrator analyzing problem and raising tickets...[/bold yellow]")
     tickets = orchestrator.identify_problems_and_create_tickets(selected_problem)
 
-    console.print(f"[green]✔ Raised {len(tickets)} problem tickets.[/green]\n")
+    console.print(f"[green][OK] Raised {len(tickets)} problem tickets.[/green]\n")
 
     console.print("[bold yellow]Step 2: Dispatching tickets into agent queues (limit: 3 per agent)...[/bold yellow]")
     orchestrator.dispatch_all_pending()

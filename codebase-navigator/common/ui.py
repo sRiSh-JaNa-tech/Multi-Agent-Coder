@@ -30,9 +30,9 @@ class ConsoleUI:
     def display_app_banner(self, repo: str | None = None) -> None:
         """Render modern header panel with agent capabilities and active workspace."""
         title_text = Text()
-        title_text.append("⚡ MULTI-AGENT CODEBASE NAVIGATOR & CODING AGENT ⚡\n", style="bold cyan")
+        title_text.append("MULTI-AGENT CODEBASE NAVIGATOR & CODING AGENT\n", style="bold cyan")
         title_text.append(
-            "Autonomous Collaboration: Orchestrator ── Navigator ── Coder ── Reviewer",
+            "Autonomous Collaboration: Orchestrator -- Navigator -- Coder -- Reviewer",
             style="dim italic",
         )
 
@@ -40,10 +40,10 @@ class ConsoleUI:
         grid.add_column(style="bold cyan", justify="left")
         grid.add_column(style="dim", justify="left")
 
-        grid.add_row("🔍 Navigator", "Semantic RAG, AST outlines, exact grep & file reading")
-        grid.add_row("💻 Coder", "Surgical text replacements, file creation & code patches")
-        grid.add_row("🛡️ Reviewer", "Syntax validation, test runners, git diff analysis")
-        grid.add_row("🧠 Memory", "Persistent architectural facts, insights & preferences")
+        grid.add_row("Navigator", "Semantic RAG, AST outlines, exact grep & file reading")
+        grid.add_row("Coder", "Surgical text replacements, file creation & code patches")
+        grid.add_row("Reviewer", "Syntax validation, test runners, git diff analysis")
+        grid.add_row("Memory", "Persistent architectural facts, insights & preferences")
 
         if repo:
             repo_status = Panel(
@@ -70,16 +70,16 @@ class ConsoleUI:
     def display_agent_banner(self, agent_name: str, task: str) -> None:
         """Render distinct banner when a specific subagent takes action."""
         color_map = {
-            "orchestrator": ("bold magenta", "magenta", "🎯"),
-            "navigator": ("bold cyan", "cyan", "🔍"),
-            "coder": ("bold green", "green", "💻"),
-            "reviewer": ("bold yellow", "yellow", "🛡️"),
+            "orchestrator": ("bold magenta", "magenta", ""),
+            "navigator": ("bold cyan", "cyan", ""),
+            "coder": ("bold green", "green", ""),
+            "reviewer": ("bold yellow", "yellow", ""),
         }
         style, border, emoji = color_map.get(
-            agent_name.lower(), ("bold white", "white", "🤖")
+            agent_name.lower(), ("bold white", "white", "")
         )
 
-        title = f"{emoji} [{style}]{agent_name.upper()} AGENT[/{style}]"
+        title = f"[{style}]{agent_name.upper()} AGENT[/{style}]"
         self.console.print(
             Panel(
                 f"[white]{task}[/white]",
@@ -97,19 +97,19 @@ class ConsoleUI:
         if name in ("create_file", "write_file", "replace_file_content"):
             category = "CODE EDIT"
             color = "green"
-            icon = "✏️"
+            icon = ""
         elif name in ("run_command", "git_diff", "git_status", "check_syntax"):
             category = "EXECUTE"
             color = "yellow"
-            icon = "⚡"
+            icon = ""
         elif name in ("get_file_outline", "search_code", "grep", "read_file", "list_directory"):
             category = "NAVIGATE"
             color = "cyan"
-            icon = "🔍"
+            icon = ""
         else:
             category = "SYSTEM"
             color = "magenta"
-            icon = "📦"
+            icon = ""
 
         # Build clean parameter badges
         param_table = Table.grid(padding=(0, 1))
@@ -122,11 +122,11 @@ class ConsoleUI:
             str_v = str(v)
             if len(str_v) > 85:
                 str_v = str_v[:82] + "..."
-            param_table.add_row(f"{k}:", "→", str_v)
+            param_table.add_row(f"{k}:", "->", str_v)
 
         panel_content = Group(
             Text.assemble(
-                (f"{icon} [{category}] ", f"bold {color}"),
+                (f"[{category}] ", f"bold {color}"),
                 (name, "bold white"),
             ),
             param_table,
@@ -192,7 +192,7 @@ class ConsoleUI:
         """Render AST outlines as a clean interactive tree."""
         lines = text.splitlines()
         root_title = lines[0] if lines else "Symbols Outline"
-        tree = Tree(f"[bold cyan]📁 {root_title}[/bold cyan]")
+        tree = Tree(f"[bold cyan]{root_title}[/bold cyan]")
         current_class_node = None
 
         for line in lines[1:]:
@@ -201,12 +201,12 @@ class ConsoleUI:
                 continue
 
             if stripped.startswith("class "):
-                current_class_node = tree.add(f"[bold yellow]🏛️ {stripped}[/bold yellow]")
+                current_class_node = tree.add(f"[bold yellow]{stripped}[/bold yellow]")
             elif stripped.startswith("def ") or stripped.startswith("async def "):
                 if line.startswith("    ") and current_class_node:
-                    current_class_node.add(f"[green]λ {stripped}[/green]")
+                    current_class_node.add(f"[green]{stripped}[/green]")
                 else:
-                    tree.add(f"[bold green]λ {stripped}[/bold green]")
+                    tree.add(f"[bold green]{stripped}[/bold green]")
             else:
                 tree.add(f"[dim]{stripped}[/dim]")
 
@@ -224,7 +224,7 @@ class ConsoleUI:
         if "No git diff detected" in diff_text:
             self.console.print(
                 Panel(
-                    "[dim green]✓ Clean working tree (no unstaged or staged diff)[/dim green]",
+                    "[dim green][OK] Clean working tree (no unstaged or staged diff)[/dim green]",
                     border_style="green",
                     box=ROUNDED,
                 )
@@ -245,16 +245,16 @@ class ConsoleUI:
         """Render terminal command execution panel with exit code badge."""
         has_exit_zero = "Exit code: 0" in result
         status_badge = (
-            "[bold green]✓ SUCCESS (Code 0)[/bold green]"
+            "[bold green][OK] SUCCESS (Code 0)[/bold green]"
             if has_exit_zero
-            else "[bold red]✗ FAILURE (Non-Zero)[/bold red]"
+            else "[bold red][FAIL] FAILURE (Non-Zero)[/bold red]"
         )
         border = "green" if has_exit_zero else "red"
 
         self.console.print(
             Panel(
                 result,
-                title=f"Terminal Output ── {status_badge}",
+                title=f"Terminal Output -- {status_badge}",
                 title_align="left",
                 border_style=border,
                 box=ROUNDED,
@@ -266,7 +266,7 @@ class ConsoleUI:
         if "Syntax valid" in result:
             self.console.print(
                 Panel(
-                    f"[bold green]✓ {result}[/bold green]",
+                    f"[bold green][OK] {result}[/bold green]",
                     border_style="green",
                     box=ROUNDED,
                 )
@@ -274,7 +274,7 @@ class ConsoleUI:
         else:
             self.console.print(
                 Panel(
-                    f"[bold red]✗ {result}[/bold red]",
+                    f"[bold red][FAIL] {result}[/bold red]",
                     border_style="red",
                     box=ROUNDED,
                 )
@@ -284,7 +284,7 @@ class ConsoleUI:
         """Render code modification result."""
         is_success = "Successfully" in result
         border = "green" if is_success else "red"
-        icon = "✓" if is_success else "✗"
+        icon = "[OK]" if is_success else "[FAIL]"
         self.console.print(
             Panel(
                 f"[{border}]{icon} {result}[/{border}]",

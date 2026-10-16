@@ -66,9 +66,9 @@ class TicketDashboard:
             status_style = {
                 TicketStatus.PENDING: "[yellow]PENDING[/yellow]",
                 TicketStatus.QUEUED: "[magenta]QUEUED[/magenta]",
-                TicketStatus.IN_PROGRESS: "[bold cyan]► IN PROGRESS[/bold cyan]",
-                TicketStatus.RESOLVED: "[bold green]✔ RESOLVED[/bold green]",
-                TicketStatus.FAILED: "[bold red]✖ FAILED[/bold red]",
+                TicketStatus.IN_PROGRESS: "[bold cyan]IN PROGRESS[/bold cyan]",
+                TicketStatus.RESOLVED: "[bold green][OK] RESOLVED[/bold green]",
+                TicketStatus.FAILED: "[bold red][FAIL] FAILED[/bold red]",
             }.get(t.status, str(t.status))
 
             assigned = t.assigned_agent_id or "[dim]Backlog[/dim]"
@@ -112,7 +112,7 @@ class TicketDashboard:
             self.console.print(
                 Panel(
                     "\n".join(panel_lines),
-                    title=f"[bold green]✔ {t.id} - RESOLVED[/bold green]",
+                    title=f"[bold green][OK] {t.id} - RESOLVED[/bold green]",
                     border_style="green",
                 )
             )

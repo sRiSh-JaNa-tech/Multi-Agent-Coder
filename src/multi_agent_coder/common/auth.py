@@ -184,7 +184,7 @@ def ensure_api_key(
             _console.print("[dim cyan]Validating Gemini API key connection...[/dim cyan]")
             is_valid, err_msg = validate_gemini_api_key(existing_key, model=model)
             if is_valid:
-                _console.print("[bold green]✓ Gemini API key validated successfully. Connected to Google Gemini.[/bold green]\n")
+                _console.print("[bold green][OK] Gemini API key validated successfully. Connected to Google Gemini.[/bold green]\n")
                 return existing_key
             else:
                 _console.print(
@@ -237,11 +237,11 @@ def ensure_api_key(
             _console.print("[dim cyan]Validating key with Google Gemini...[/dim cyan]")
             is_valid, err_msg = validate_gemini_api_key(entered_key, model=model, bypass_cache=True)
             if is_valid:
-                _console.print("[bold green]✓ Connection successful! API key verified and saved.[/bold green]\n")
+                _console.print("[bold green][OK] Connection successful! API key verified and saved.[/bold green]\n")
                 persist_api_key(entered_key)
                 return entered_key
             else:
-                _console.print(f"[bold red]✗ Connection test failed:[/bold red] {err_msg}")
+                _console.print(f"[bold red][FAIL] Connection test failed:[/bold red] {err_msg}")
                 _console.print("[yellow]Please check the key and try again, or obtain a new key at https://aistudio.google.com/app/apikey[/yellow]\n")
 
         except (KeyboardInterrupt, EOFError):
