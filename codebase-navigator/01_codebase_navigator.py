@@ -24,7 +24,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from common import GeminiTokenTracker, setup_logging, ensure_api_key, validate_gemini_api_key
+from common import GeminiTokenTracker, setup_logging
+from common.auth import ensure_api_key, validate_gemini_api_key, ensure_api_key, validate_gemini_api_key
 from common.menu import interactive_menu
 from common.ui import ConsoleUI
 
@@ -112,62 +113,6 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
         + OUTLINE_TOOLS
     )
     return [{"function_declarations": all_tools}]
-
-
-def ensure_api_key(console: Console | None = None, force_prompt: bool = False) -> str:
-    """Ensure a valid GEMINI_API_KEY is available in environment or prompt the user."""
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if api_key and not force_prompt and not api_key.startswith("AQ."):
-        return api_key
-
-    _console = console or Console()
-    if api_key.startswith("AQ."):
-        reason = "The current GEMINI_API_KEY begins with 'AQ.', which is a Google OAuth/session token, NOT a Gemini API key."
-    elif force_prompt:
-        reason = "The current GEMINI_API_KEY was rejected by Google (401 UNAUTHENTICATED / Invalid Key)."
-    else:
-        reason = "GEMINI_API_KEY not found in environment or .env"
-    _console.print(
-        Panel(
-            f"[bold yellow]{reason}[/bold yellow]\n\n"
-            "Please enter a valid Google Gemini API key to proceed.\n"
-            "You can generate one for free at: [cyan]https://aistudio.google.com/app/apikey[/cyan]\n"
-            "[dim](A valid Gemini API key typically starts with 'AIzaSy' and is 39 characters long)[/dim]",
-            title="Gemini API Key Required",
-            border_style="yellow",
-        )
-    )
-
-    while True:
-        try:
-            if sys.stdin.isatty():
-                entered_key = Prompt.ask("[bold green]Enter your GEMINI_API_KEY[/bold green]", password=True).strip()
-            else:
-                _console.print("[bold green]Enter your GEMINI_API_KEY:[/bold green] ", end="")
-                entered_key = sys.stdin.readline().strip()
-
-            if entered_key:
-                os.environ["GEMINI_API_KEY"] = entered_key
-
-                # Update .env in project paths
-                for env_path in [Path(".env"), Path("..") / ".env", Path(r"C:\Users\srish\Desktop\Multi-Coding-Agent\.env")]:
-                    try:
-                        if env_path.exists():
-                            lines = env_path.read_text(encoding="utf-8").splitlines()
-                            filtered = [l for l in lines if not l.startswith("GEMINI_API_KEY=")]
-                            filtered.append(f"GEMINI_API_KEY={entered_key}")
-                            env_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
-                        else:
-                            env_path.write_text(f"GEMINI_API_KEY={entered_key}\n", encoding="utf-8")
-                    except Exception:
-                        pass
-
-                _console.print("[green]API key updated successfully![/green]\n")
-                return entered_key
-            _console.print("[red]API key cannot be empty. Please enter a valid key.[/red]")
-        except (KeyboardInterrupt, EOFError):
-            _console.print("\n[yellow]Exiting: API key entry cancelled.[/yellow]")
-            raise SystemExit(0)
 
 
 def get_max_agents() -> int:

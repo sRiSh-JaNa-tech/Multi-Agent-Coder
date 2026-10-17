@@ -126,12 +126,7 @@ def validate_gemini_api_key(
     if not key:
         return False, "API key cannot be empty."
 
-    if key.startswith("AQ."):
-        return (
-            False,
-            "Key starts with 'AQ.', which is an internal OAuth session token rather than a Gemini API key. "
-            "Gemini API keys are generated at Google AI Studio (https://aistudio.google.com/app/apikey, typically starting with 'AIzaSy').",
-        )
+
 
     if not bypass_cache and key in _VALIDATED_KEYS:
         return True, "API key verified (cached)."
@@ -203,7 +198,7 @@ def ensure_api_key(
                     "[bold yellow]GEMINI_API_KEY not found in environment or .env[/bold yellow]\n\n"
                     "Please enter your Google Gemini API key to proceed.\n"
                     "You can generate one for free at: [cyan]https://aistudio.google.com/app/apikey[/cyan]\n"
-                    "[dim](Valid keys from Google AI Studio typically start with 'AIzaSy' and are 39 characters)[/dim]",
+                    "[dim](Google AI Studio keys typically start with 'AQ.' or 'AIzaSy')[/dim]",
                     title="Gemini API Key Required",
                     border_style="yellow",
                 )

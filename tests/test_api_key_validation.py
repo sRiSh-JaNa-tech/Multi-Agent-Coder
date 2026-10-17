@@ -24,11 +24,17 @@ def test_rejects_empty_and_whitespace_keys():
     assert "empty" in msg.lower()
 
 
-def test_rejects_oauth_aq_session_token():
-    is_valid, msg = validate_gemini_api_key("AQ.Ab8RN6somethingdummytoken")
-    assert not is_valid
-    assert "AQ." in msg
-    assert "Google AI Studio" in msg
+def test_accepts_valid_aq_auth_key():
+    with patch("multi_agent_coder.common.auth.genai.Client") as mock_client_cls:
+        mock_instance = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "pong"
+        mock_instance.models.generate_content.return_value = mock_response
+        mock_client_cls.return_value = mock_instance
+
+        is_valid, msg = validate_gemini_api_key("AQ.Ab8RN6validkeyfromaistudio", bypass_cache=True)
+        assert is_valid
+        assert "verified" in msg.lower()
 
 
 def test_validation_caching():
