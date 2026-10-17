@@ -12,13 +12,15 @@ from ..common.logging_config import setup_logging
 logger = setup_logging(__name__)
 
 # Gemini embedding model
-MODEL_NAME = "text-embedding-004"
+MODEL_NAME = "gemini-embedding-001"
 
 
 class Embedder:
     """Wraps Gemini for generating embeddings."""
 
     def __init__(self, model_name: str = MODEL_NAME, api_key: str | None = None) -> None:
+        if model_name in ("text-embedding-004", "models/text-embedding-004"):
+            model_name = "gemini-embedding-001"
         logger.info("Loading Gemini embedding model: %s", model_name)
         if api_key:
             self.client = genai.Client(api_key=api_key)
@@ -26,14 +28,19 @@ class Embedder:
             self.client = genai.Client()
         self.model_name = model_name
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for a list of texts using Gemini."""
-        response = self.client.models.embed_content(
-            model=self.model_name,
-            contents=texts,
-        )
-        # Extract embeddings from response
-        return [e.values for e in response.embeddings]
+    def embed(self, texts: list[str], batch_size: int = 64) -> list[list[float]]:
+        """Generate embeddings for a list of texts using Gemini in compliant batches (max 100 per request)."""
+        if not texts:
+            return []
+        all_embeddings: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            response = self.client.models.embed_content(
+                model=self.model_name,
+                contents=batch,
+            )
+            all_embeddings.extend([e.values for e in response.embeddings])
+        return all_embeddings
 
     def embed_query(self, query: str) -> list[float]:
         """Generate embedding for a single search query."""
@@ -70,8 +77,8 @@ def index_chunks(
     # Generate embeddings in batches
     logger.info("Generating embeddings for %d chunks...", len(chunks))
     if len(chunks) > 1000:
-        logger.info("Large repo detected — this may take a few minutes...")
-    batch_size = 128
+        logger.info("Large repo detected - this may take a few minutes...")
+    batch_size = 64
     all_embeddings: list[list[float]] = []
     for i in range(0, len(documents), batch_size):
         batch = documents[i : i + batch_size]

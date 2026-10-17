@@ -151,7 +151,10 @@ def execute_clone_and_index(
         count = index_chunks(embedder, vector_store, collection_name, chunks)
     except Exception as e:
         logger.error("Failed to embed repository chunks: %s", e)
-        return f"Embedding failed for '{repo}': {e}. Please ensure your GEMINI_API_KEY is a valid AI Studio key (starts with AIzaSy)." 
+        err_str = str(e)
+        if "API_KEY_INVALID" in err_str or "UNAUTHENTICATED" in err_str:
+            return f"Embedding failed for '{repo}': Authentication error. Please check your GEMINI_API_KEY."
+        return f"Embedding failed for '{repo}': {e}" 
 
     return (
         f"Indexed '{repo}': {len(files)} files, {count} chunks. "
