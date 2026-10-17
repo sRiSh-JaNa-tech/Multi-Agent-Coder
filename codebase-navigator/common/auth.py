@@ -155,6 +155,12 @@ def validate_gemini_api_key(
             return False, "Google API error: 401 UNAUTHENTICATED. The credential was rejected by Google's gateway."
         if "PERMISSION_DENIED" in err_msg:
             return False, f"Google API error: Permission Denied. ({err_msg})"
+        
+        # High demand / 503 / 429 indicates Google authenticated the key and reached model tier
+        if any(code in err_msg for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "high demand")):
+            _VALIDATED_KEYS.add(key)
+            return True, "API key authenticated (Google service temporarily experiencing high demand)."
+
         return False, f"Connection failed: {err_msg}"
 
 

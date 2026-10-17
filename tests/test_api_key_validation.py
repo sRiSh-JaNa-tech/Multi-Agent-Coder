@@ -75,3 +75,15 @@ def test_validation_handles_google_errors():
 def test_find_configured_api_key_from_env(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "AIzaSy_test_from_env")
     assert find_configured_api_key() == "AIzaSy_test_from_env"
+
+
+def test_accepts_transient_503_high_demand():
+    dummy_key = "AQ.valid_key_encountering_503"
+    with patch("multi_agent_coder.common.auth.genai.Client") as mock_client_cls:
+        mock_instance = MagicMock()
+        mock_instance.models.generate_content.side_effect = Exception("503 UNAVAILABLE. This model is currently experiencing high demand.")
+        mock_client_cls.return_value = mock_instance
+
+        is_valid, msg = validate_gemini_api_key(dummy_key, bypass_cache=True)
+        assert is_valid
+        assert "high demand" in msg.lower()
