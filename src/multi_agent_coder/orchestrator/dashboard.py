@@ -29,7 +29,6 @@ class TicketDashboard:
 
     def render_state(self, agents: list[AgentWorker], tickets: list[Ticket], backlog: list[Ticket]) -> None:
         """Render the complete status of all agents and tickets."""
-        # 1. Agent Queue Status Table
         agent_table = Table(title="[bold yellow]Worker Agent Fleet Status[/bold yellow]", expand=True, border_style="yellow")
         agent_table.add_column("Agent ID", style="bold cyan", width=12)
         agent_table.add_column("Role", style="white")
@@ -53,7 +52,6 @@ class TicketDashboard:
 
         self.console.print(agent_table)
 
-        # 2. Ticket Board Table
         ticket_table = Table(title="[bold cyan]Ticket Distribution & Execution Board[/bold cyan]", expand=True, border_style="cyan")
         ticket_table.add_column("Ticket ID", style="bold yellow", width=14)
         ticket_table.add_column("Title", style="white")

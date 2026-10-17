@@ -1,0 +1,8 @@
+# Exclude node_modules from both projects
+**/node_modules
+**/dist
+**/.env
+**/venv
+**/__pycache__
+**/*.pyc
+backend/src/temp/*

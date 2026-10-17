@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-deployment
+  namespace: filewiz
+  labels:
+    app: authentication
+    tier: auth
+    component: auth-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: authentication
+  template:
+    metadata:
+      labels:
+        app: authentication
+        tier: auth
+        component: auth-service
+    spec:
+      # Isolation: Pod anti-affinity to keep auth pods isolated from database and backend workloads
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - database
+                        - backend
+                topologyKey: "kubernetes.io/hostname"
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - authentication
+                topologyKey: "kubernetes.io/hostname"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: auth-service
+          image: filewiz-auth:v1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 4000
+              name: http
+          env:
+            - name: PORT
+              value: "4000"
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: filewiz-config
+                  key: NODE_ENV
+            - name: DATABASE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: filewiz-config
+                  key: DATABASE_SERVICE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: filewiz-secrets
+                  key: JWT_SECRET
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: filewiz-secrets
+                  key: SESSION_SECRET
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: filewiz
+  labels:
+    app: authentication
+    tier: auth
+spec:
+  selector:
+    app: authentication
+  ports:
+    - protocol: TCP
+      port: 4000
+      targetPort: 4000
+      name: http

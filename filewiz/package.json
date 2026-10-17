@@ -1,0 +1,23 @@
+{
+  "name": "filewiz-workspace",
+  "version": "1.0.0",
+  "description": "FileWiz - Modern microservices document processing platform",
+  "private": true,
+  "scripts": {
+    "test": "node tests/e2e.test.js",
+    "test:e2e": "node tests/e2e.test.js",
+    "test:db": "node -e \"const { startServices, stopServices } = require('./tests/test-helper'); const { runDatabaseTests } = require('./tests/database.test'); (async () => { try { await startServices(); await runDatabaseTests(); } finally { await stopServices(); } })()\"",
+    "test:auth": "node -e \"const { startServices, stopServices } = require('./tests/test-helper'); const { runAuthTests } = require('./tests/auth.test'); (async () => { try { await startServices(); await runAuthTests(); } finally { await stopServices(); } })()\"",
+    "test:backend": "node -e \"const { startServices, stopServices } = require('./tests/test-helper'); const { runBackendTests } = require('./tests/backend.test'); (async () => { try { await startServices(); await runBackendTests(); } finally { await stopServices(); } })()\""
+  },
+  "keywords": [
+    "pdf",
+    "compression",
+    "7zip",
+    "microservices",
+    "sqlite",
+    "authentication"
+  ],
+  "author": "",
+  "license": "ISC"
+}

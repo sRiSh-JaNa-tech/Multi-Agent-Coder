@@ -15,9 +15,11 @@ from google.genai import types
 
 try:
     from orchestrator.ticket import Ticket, TicketStatus
+    from orchestrator.prompts import build_worker_system_instruction, build_ticket_execution_prompt
     from common.logging_config import setup_logging
 except ImportError:
     from .ticket import Ticket, TicketStatus
+    from .prompts import build_worker_system_instruction, build_ticket_execution_prompt
     from ..common.logging_config import setup_logging
 
 logger = setup_logging(__name__)
@@ -176,25 +178,16 @@ class AgentWorker:
 
     def execute_ticket_task(self, ticket: Ticket) -> str:
         """
-        Execute the ticket task using Gemini with tool access (cmd, git, files).
+        Execute the ticket task using Gemini with tool access (cmd, git, files)
+        guided by cognitive prompt scaffolding.
         """
-        prompt_parts = [
-            f"You are {self.agent_id} ({self.role}).",
-            f"Your specialty is {self.specialty}.",
-            f"Target Workspace: {self.workspace_root}",
-            "",
-            "Please solve this ticket:",
-            f"Ticket ID: {ticket.id}",
-            f"Title: {ticket.title}",
-            f"Category: {ticket.category}",
-            "Description:",
-            ticket.description,
-            "",
-            "You have access to cmd (run_command) to execute shell commands, run tests, and inspect code.",
-            "You also have Git tools (git_status, git_diff, git_pull, git_push, git_commit, git_add, git_log) and file editing tools.",
-            "Use tools as needed to inspect and solve the problem, and provide a clear, concrete resolution."
-        ]
-        prompt = "\n".join(prompt_parts)
+        prompt = build_ticket_execution_prompt(
+            ticket=ticket,
+            workspace_root=self.workspace_root,
+            agent_id=self.agent_id,
+            role=self.role,
+            specialty=self.specialty,
+        )
 
         # In offline/mock test environments
         if not self.api_key or self.api_key.startswith("dummy"):
@@ -204,19 +197,23 @@ class AgentWorker:
             )
 
         worker_tools = self._build_worker_tools()
+        system_instruction = build_worker_system_instruction(
+            agent_id=self.agent_id,
+            role=self.role,
+            specialty=self.specialty,
+            workspace_root=self.workspace_root,
+        )
+
         messages = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+        max_iterations = int(os.getenv("MAX_WORKER_ITERATIONS", "8"))
 
         try:
-            for iteration in range(5):
+            for iteration in range(max_iterations):
                 response = self.client.models.generate_content(
                     model=self.model,
                     contents=messages,
                     config=types.GenerateContentConfig(
-                        system_instruction=(
-                            f"You are {self.agent_id}, a specialized software engineering agent ({self.role}). "
-                            "You have full command line execution access via 'run_command' to run shell commands, tests, scripts, "
-                            "as well as Git tools and file editing tools. Solve the ticket directly in the workspace."
-                        ),
+                        system_instruction=system_instruction,
                         tools=worker_tools,
                     ),
                 )

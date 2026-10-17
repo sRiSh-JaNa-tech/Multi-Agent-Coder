@@ -1,0 +1,160 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+:root {
+  --primary: #2563eb;
+  --secondary: #475569;
+  --accent: #f59e0b;
+}
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background: #f8fafc;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05);
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
+@keyframes gradientMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes float-slow {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(40px, -40px) scale(1.1);
+  }
+}
+
+@keyframes float-medium {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-30px, 30px) scale(0.9);
+  }
+}
+
+.hero-gradient {
+  background: linear-gradient(-45deg, #eff6ff, #f8fafc, #f5f3ff, #eff6ff);
+  background-size: 400% 400%;
+  animation: gradientMove 15s ease infinite;
+}
+
+.animate-float-slow {
+  animation: float-slow 20s ease-in-out infinite;
+}
+
+.animate-float-medium {
+  animation: float-medium 25s ease-in-out infinite;
+}
+
+.icon-holder {
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s ease;
+}
+
+.glass-card:hover .icon-holder {
+  transform: scale(1.1) rotate(3deg);
+}
+
+.ad-banner {
+  background: linear-gradient(90deg, #1e293b, #0f172a);
+  position: relative;
+  overflow: hidden;
+}
+
+.ad-shine {
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  transform: skewX(-20deg);
+  animation: shine 3s infinite;
+}
+
+@keyframes shine {
+  100% {
+    left: 200%;
+  }
+}
+
+/* PDF.js coordinates studio styles */
+.page-wrapper {
+  position: relative;
+  transition: transform 0.2s ease;
+}
+
+.textLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  opacity: 0;
+  line-height: 1.0;
+  text-indent: 0;
+}
+
+.redaction-box {
+  position: absolute;
+  background: black;
+  opacity: 0.7;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.1s ease;
+}
+
+.redaction-box:hover {
+  opacity: 0.9 !important;
+  transform: scale(1.01);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #f43f5e, #fb7185);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(244, 63, 94, 0.3);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Hide default Vite styles on root container */
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}

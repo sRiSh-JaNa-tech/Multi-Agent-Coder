@@ -12,13 +12,15 @@ import re
 import time
 from pathlib import Path
 from typing import Callable, Any
+from dotenv import find_dotenv, load_dotenv
 from google import genai
 from google.genai import types
 
-from .ticket import Ticket, TicketStatus
+from .ticket import Ticket, TicketStatus, TicketDAG
 from .agent_worker import AgentWorker, QueueFullError
 from ..common.logging_config import setup_logging
 
+load_dotenv(find_dotenv())
 logger = setup_logging(__name__)
 
 
@@ -34,7 +36,7 @@ class MainOrchestrator:
     def __init__(
         self,
         max_agents: int | None = None,
-        queue_limit_per_agent: int = 3,
+        queue_limit_per_agent: int | None = None,
         model: str = "gemini-2.5-flash-lite",
         api_key: str | None = None,
         workspace_root: Path | str | None = None,
@@ -42,9 +44,8 @@ class MainOrchestrator:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd()
         self.model = model
-        self.queue_limit_per_agent = queue_limit_per_agent
         
-        # Read limit from .env or argument
+        # Read max_agents from argument or .env (MAX_AGENTS / MAX_ACTIVE_AGENTS, default: 3)
         if max_agents is None:
             raw_val = os.getenv("MAX_AGENTS", os.getenv("MAX_ACTIVE_AGENTS", "3")).strip()
             try:
@@ -54,7 +55,20 @@ class MainOrchestrator:
         else:
             self.max_agents = max(1, max_agents)
 
-        # Pending backlog when all agents' queues are at capacity (limit 3)
+        # Read queue_limit_per_agent from argument or .env (QUEUE_LIMIT_PER_AGENT / AGENT_QUEUE_LIMIT / MAX_QUEUE_SIZE, default: 3)
+        if queue_limit_per_agent is None:
+            raw_queue = os.getenv(
+                "QUEUE_LIMIT_PER_AGENT",
+                os.getenv("AGENT_QUEUE_LIMIT", os.getenv("MAX_QUEUE_SIZE", "3"))
+            ).strip()
+            try:
+                self.queue_limit_per_agent = max(1, int(raw_queue))
+            except ValueError:
+                self.queue_limit_per_agent = 3
+        else:
+            self.queue_limit_per_agent = max(1, queue_limit_per_agent)
+
+        # Pending backlog when all agents' queues are at capacity
         self.pending_backlog: list[Ticket] = []
         self.all_tickets: list[Ticket] = []
 
@@ -264,6 +278,49 @@ Respond ONLY with a JSON array of ticket objects:
 
         return resolved_tickets
 
+    def load_manifest(self, manifest_data: list[dict[str, Any]] | dict[str, Any]) -> list[Ticket]:
+        """
+        Load an explicit DAG of tickets from a manifest (e.g. prepared by Antigravity or JSON file).
+        Validates dependencies using Kahn's algorithm before queueing.
+        """
+        raw_tickets = manifest_data.get("tickets", []) if isinstance(manifest_data, dict) else manifest_data
+        loaded: list[Ticket] = []
+
+        for item in raw_tickets:
+            t_id = item.get("id")
+            title = item.get("title", "Untitled Ticket")
+            desc = item.get("description", "")
+            cat = item.get("category", "coding")
+            deps = item.get("depends_on", [])
+
+            if t_id:
+                t = Ticket(
+                    id=t_id,
+                    title=title,
+                    description=desc,
+                    category=cat,
+                    depends_on=list(deps),
+                )
+            else:
+                t = Ticket.create(
+                    title=title,
+                    description=desc,
+                    category=cat,
+                    depends_on=list(deps),
+                )
+            loaded.append(t)
+
+        # Validate DAG dependencies across the loaded tickets
+        if loaded:
+            TicketDAG(loaded)
+
+        for t in loaded:
+            self.all_tickets.append(t)
+            self.pending_backlog.append(t)
+
+        logger.info("Main Orchestrator loaded and validated %d manifest tickets.", len(loaded))
+        return loaded
+
     def get_summary(self) -> dict[str, Any]:
         """Return a structured summary of the ticket system state."""
         total = len(self.all_tickets)
@@ -291,5 +348,19 @@ Respond ONLY with a JSON array of ticket objects:
                     "completed_count": len(a.history),
                 }
                 for a in self.agents
-            ]
+            ],
+            "tickets": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "category": t.category,
+                    "status": t.status.value,
+                    "assigned_agent_id": t.assigned_agent_id,
+                    "duration_seconds": t.duration_seconds,
+                    "result": t.result,
+                    "error": t.error,
+                }
+                for t in self.all_tickets
+            ],
         }
+

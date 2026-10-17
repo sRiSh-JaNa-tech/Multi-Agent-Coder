@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "multi-agent-coder": {
+      "command": "python",
+      "args": ["-m", "multi_agent_coder.mcp.server"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

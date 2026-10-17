@@ -7,7 +7,7 @@ def main():
         prog="multi-agent-coder",
         description="Multi-Agent Coder: Autonomous Concurrent Engineering System"
     )
-    parser.add_argument("command", choices=["navigator", "orchestrator", "harness"],
+    parser.add_argument("command", choices=["navigator", "orchestrator", "harness", "mcp"],
                         help="Subcommand to run")
     parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to subcommand")
 
@@ -25,6 +25,9 @@ def main():
         from multi_agent_coder.cli import harness_demo
         sys.argv = [sys.argv[0]] + args.args
         harness_demo.main()
+    elif args.command == "mcp":
+        from multi_agent_coder.mcp import server
+        server.main()
 
 if __name__ == "__main__":
     main()
