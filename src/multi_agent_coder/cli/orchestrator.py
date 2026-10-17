@@ -73,6 +73,20 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Strict maximum tickets queued per agent (defaults to QUEUE_LIMIT_PER_AGENT from .env).",
     )
+    parser.add_argument(
+        "--workspace",
+        type=str,
+        default=None,
+        help="Project directory the agents edit IN PLACE (defaults to TARGET_WORKSPACE from .env, then cwd). "
+             "Never copy a project into the swarm repo.",
+    )
+    parser.add_argument(
+        "--token-limit",
+        type=str,
+        default=None,
+        help="Total token budget for the run: an integer, or 'none' for unlimited "
+             "(defaults to TOKEN_USAGE_LIMIT from .env).",
+    )
     return parser.parse_args(args)
 
 
@@ -85,10 +99,23 @@ def main(cli_args: list[str] | None = None) -> None:
     else:
         api_key = ensure_api_key(console)
 
-    orchestrator = MainOrchestrator(
-        api_key=api_key,
-        queue_limit_per_agent=args.queue_limit,
-        max_agents=args.max_agents,
+    extra = {}
+    if args.token_limit is not None:
+        extra["token_limit"] = args.token_limit
+    try:
+        orchestrator = MainOrchestrator(
+            api_key=api_key,
+            queue_limit_per_agent=args.queue_limit,
+            max_agents=args.max_agents,
+            workspace_root=args.workspace,
+            **extra,
+        )
+    except ValueError as exc:  # ConfigError subclasses ValueError
+        console.print(f"[bold red]Configuration error: {exc}[/bold red]")
+        sys.exit(2)
+    console.print(
+        f"[dim]Workspace (edited in place): {orchestrator.workspace_root} | "
+        f"model: {orchestrator.model} | run: {orchestrator.run_id}[/dim]"
     )
     dashboard = TicketDashboard(console=console)
 

@@ -17,39 +17,42 @@ REPOS_DIR = Path(__file__).parent.parent / "repos"
 FILE_TOOLS = [
     {
         "name": "read_file",
-        "description": "Read the full content of a file from an indexed repository, with line numbers.",
+        "description": (
+            "Read the full content of a file in the target workspace, with line numbers. "
+            "Paths are relative to the workspace root."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "repo": {
                     "type": "string",
-                    "description": "Repository name (e.g., 'pallets-flask')",
+                    "description": "Ignored when running inside a swarm workspace; pass '.' or omit.",
                 },
                 "filepath": {
                     "type": "string",
-                    "description": "Path to file within the repo (e.g., 'src/flask/app.py')",
+                    "description": "Path to file relative to the workspace root (e.g., 'src/app.js')",
                 },
             },
-            "required": ["repo", "filepath"],
+            "required": ["filepath"],
         },
     },
     {
         "name": "list_directory",
-        "description": "List files and directories at a path within an indexed repository.",
+        "description": "List files and directories at a path relative to the target workspace root.",
         "parameters": {
             "type": "object",
             "properties": {
                 "repo": {
                     "type": "string",
-                    "description": "Repository name (e.g., 'pallets-flask')",
+                    "description": "Ignored when running inside a swarm workspace; pass '.' or omit.",
                 },
                 "path": {
                     "type": "string",
-                    "description": "Path within repo (defaults to root)",
+                    "description": "Path within the workspace (defaults to root)",
                     "default": "",
                 },
             },
-            "required": ["repo"],
+            "required": [],
         },
     },
 ]
@@ -63,20 +66,52 @@ def _find_repo_path(repo: str) -> Path | None:
     return find_repo_path(repo)
 
 
-def execute_read_file(_vector_store: Any, tool_input: dict[str, Any]) -> str:
-    """Read a file from an indexed repository with line numbers."""
+def _resolve_target(
+    tool_input: dict[str, Any], relative: str, workspace_root: Path | None
+) -> tuple[Path | None, str | None, str]:
+    """
+    Resolve ``relative`` to an absolute path.
+
+    Returns (path, error, label). With ``workspace_root`` the path is confined to that
+    directory and the ``repo`` argument is ignored, so an agent can never be redirected to a
+    different checkout (the original cause of project copies landing in the swarm repo).
+    """
+    if workspace_root is not None:
+        from .coding import resolve_safe_path
+
+        try:
+            return resolve_safe_path(Path(workspace_root), relative or "."), None, "workspace"
+        except PermissionError as exc:
+            return None, f"Error: {exc}", "workspace"
+
     repo = tool_input.get("repo", "")
-    filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
     if not repo:
-        return "Error: 'repo' parameter is required."
+        return None, "Error: 'repo' parameter is required.", ""
+    repo_path = _find_repo_path(repo)
+    if not repo_path:
+        return None, f"Repository '{repo}' not found locally.", repo
+    return (repo_path / relative if relative else repo_path), None, repo
+
+
+def execute_read_file(
+    _vector_store: Any, tool_input: dict[str, Any], workspace_root: Path | None = None
+) -> str:
+    """Read a file (inside ``workspace_root`` when given) with line numbers."""
+    filepath = (
+        tool_input.get("filepath")
+        or tool_input.get("file_path")
+        or tool_input.get("file")
+        or tool_input.get("path")
+        or ""
+    ).lstrip("/\\")
     if not filepath:
         return "Error: 'filepath' parameter is required."
 
-    repo_path = _find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found locally."
+    file_path, error, label = _resolve_target(tool_input, filepath, workspace_root)
+    if error:
+        return error
+    repo = label
 
-    file_path = repo_path / filepath
     if not file_path.is_file():
         return f"File not found: {filepath} in {repo}"
 
@@ -97,18 +132,22 @@ def execute_read_file(_vector_store: Any, tool_input: dict[str, Any]) -> str:
     return result
 
 
-def execute_list_directory(_vector_store: Any, tool_input: dict[str, Any]) -> str:
-    """List directory contents of an indexed repository."""
-    repo = tool_input.get("repo", "")
-    subpath = (tool_input.get("path") or tool_input.get("subpath") or "").lstrip("/\\")
-    if not repo:
-        return "Error: 'repo' parameter is required."
+def execute_list_directory(
+    _vector_store: Any, tool_input: dict[str, Any], workspace_root: Path | None = None
+) -> str:
+    """List directory contents (inside ``workspace_root`` when given)."""
+    subpath = (
+        tool_input.get("path")
+        or tool_input.get("subpath")
+        or tool_input.get("directory_path")
+        or ""
+    ).lstrip("/\\")
 
-    repo_path = _find_repo_path(repo)
-    if not repo_path:
-        return f"Repository '{repo}' not found locally."
+    target, error, label = _resolve_target(tool_input, subpath, workspace_root)
+    if error:
+        return error
+    repo = label
 
-    target = repo_path / subpath if subpath else repo_path
     if not target.is_dir():
         return f"Directory not found: {subpath or '/'} in {repo}"
 

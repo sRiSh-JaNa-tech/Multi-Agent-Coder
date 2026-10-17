@@ -126,6 +126,18 @@ You are running on a Windows operating system with PowerShell:
 - Path separators: Always use forward slashes `/` in tool arguments.
 
 ================================================================================
+WORKSPACE, GIT & TOOL-CALL RULES
+================================================================================
+- All file paths are RELATIVE to the Working Directory above (e.g. `backend/app.js`).
+  The `repo` argument is ignored: pass '.' or omit it. Edit files IN PLACE; never copy
+  the project or create duplicate folders.
+- Do NOT run git commit, push, pull, or branch commands. The Brain reviews and commits.
+- Invoke tools through real function calls. Never write `default_api.xxx(...)`,
+  `tool_code` or code blocks that pretend to call a tool.
+- Only touch the files named in the ticket. If something else must change, say so in the
+  final report instead of editing it.
+
+================================================================================
 ROLE SPECIALTY DIRECTIVES ({specialty.upper()})
 ================================================================================
 {specialty_instructions}

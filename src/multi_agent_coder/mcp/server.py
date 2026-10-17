@@ -17,8 +17,11 @@ from typing import Any
 from dotenv import find_dotenv, load_dotenv
 from mcp.server.mcpserver import MCPServer
 
+from ..common.config import ConfigError, SwarmConfig, resolve_workspace, workspace_source
 from ..common.logging_config import setup_logging
+from ..orchestrator.brain_prompt import SWARM_BRAIN_SYSTEM_PROMPT
 from ..orchestrator.main_orchestrator import MainOrchestrator
+from ..orchestrator.run_logger import read_run_index, read_run_log
 from ..tools.repo import merge_worktree, prune_worktrees
 
 load_dotenv(find_dotenv())
@@ -27,16 +30,16 @@ logger = setup_logging(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
+def _workspace(workspace: str | None) -> Path:
+    """Target project: explicit arg > TARGET_WORKSPACE > swarm repo (legacy default)."""
+    return resolve_workspace(workspace, default=REPO_ROOT)
+
+
 def create_mcp_server() -> MCPServer:
     """Build and configure the Multi-Agent Coder MCP server."""
     server = MCPServer(
         name="MultiAgentCoderSwarm",
-        instructions=(
-            "You are connected to the Multi-Agent Coder worker swarm. "
-            "You act as the Lead Cognitive Architect (The Brain). "
-            "Use these tools to dispatch tasks, monitor worker queues, review worktree git diffs, "
-            "and merge verified solutions."
-        ),
+        instructions=SWARM_BRAIN_SYSTEM_PROMPT,
     )
 
     @server.tool(
@@ -53,14 +56,19 @@ def create_mcp_server() -> MCPServer:
         objective: str = "Architectural Ticket DAG",
         max_agents: int | None = None,
         queue_limit: int | None = None,
+        workspace: str | None = None,
+        token_limit: str | None = None,
     ) -> str:
         try:
             api_key = os.getenv("GEMINI_API_KEY", "")
+            extra = {} if token_limit is None else {"token_limit": token_limit}
             orchestrator = MainOrchestrator(
                 api_key=api_key,
                 queue_limit_per_agent=queue_limit,
                 max_agents=max_agents,
-                workspace_root=REPO_ROOT,
+                workspace_root=_workspace(workspace),
+                objective=objective,
+                **extra,
             )
             orchestrator.load_manifest({"objective": objective, "tickets": tickets})
             orchestrator.dispatch_all_pending()
@@ -68,6 +76,7 @@ def create_mcp_server() -> MCPServer:
 
             summary = orchestrator.get_summary()
             summary["objective"] = objective
+            summary["workspace_source"] = workspace_source(workspace)
             return json.dumps(summary, indent=2)
         except Exception as e:
             logger.exception("Error in swarm_submit_dag")
@@ -84,14 +93,19 @@ def create_mcp_server() -> MCPServer:
         objective: str,
         max_agents: int | None = None,
         queue_limit: int | None = None,
+        workspace: str | None = None,
+        token_limit: str | None = None,
     ) -> str:
         try:
             api_key = os.getenv("GEMINI_API_KEY", "")
+            extra = {} if token_limit is None else {"token_limit": token_limit}
             orchestrator = MainOrchestrator(
                 api_key=api_key,
                 queue_limit_per_agent=queue_limit,
                 max_agents=max_agents,
-                workspace_root=REPO_ROOT,
+                workspace_root=_workspace(workspace),
+                objective=objective,
+                **extra,
             )
             orchestrator.identify_problems_and_create_tickets(objective)
             orchestrator.dispatch_all_pending()
@@ -99,6 +113,7 @@ def create_mcp_server() -> MCPServer:
 
             summary = orchestrator.get_summary()
             summary["objective"] = objective
+            summary["workspace_source"] = workspace_source(workspace)
             return json.dumps(summary, indent=2)
         except Exception as e:
             logger.exception("Error in swarm_dispatch_objective")
@@ -108,29 +123,43 @@ def create_mcp_server() -> MCPServer:
         name="swarm_status",
         description="Query the operational status of the swarm, repository root, active Git worktrees, and .env configuration limits.",
     )
-    def swarm_status() -> str:
+    def swarm_status(workspace: str | None = None) -> str:
         try:
-            worktrees_dir = REPO_ROOT / ".worktrees"
+            cfg = SwarmConfig.from_env()
+            ws = _workspace(workspace)
+            worktrees_dir = ws / ".worktrees"
             active_worktrees = []
             if worktrees_dir.exists():
                 active_worktrees = [p.name for p in worktrees_dir.iterdir() if p.is_dir()]
 
             # Query git branches
-            branches_proc = subprocess.run(
-                ["git", "branch", "--list", "agent/*"],
-                cwd=str(REPO_ROOT),
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            agent_branches = [
-                b.strip().lstrip("* ")
-                for b in branches_proc.stdout.splitlines()
-                if b.strip()
-            ]
+            agent_branches: list[str] = []
+            try:
+                branches_proc = subprocess.run(
+                    ["git", "branch", "--list", "agent/*"],
+                    cwd=str(ws),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                agent_branches = [
+                    b.strip().lstrip("* ")
+                    for b in branches_proc.stdout.splitlines()
+                    if b.strip()
+                ]
+            except Exception:
+                pass
 
             status = {
-                "workspace_root": str(REPO_ROOT),
+                "workspace_root": str(ws),
+                "workspace_source": workspace_source(workspace),
+                "swarm_repo_root": str(REPO_ROOT),
+                "workspace_is_swarm_repo": ws == REPO_ROOT,
+                "model": cfg.model_name,
+                "token_usage_limit": cfg.token_limit_label,
+                "agent_names": cfg.agent_names or "default (Agent-N)",
+                "log_dir": str(cfg.log_dir),
+                "recent_runs": read_run_index(cfg.log_dir, limit=5),
                 "active_worktrees": active_worktrees,
                 "agent_branches": agent_branches,
                 "configured_max_agents": int(os.getenv("MAX_AGENTS", "3")),
@@ -147,21 +176,37 @@ def create_mcp_server() -> MCPServer:
             return json.dumps({"error": str(e)}, indent=2)
 
     @server.tool(
+        name="swarm_get_run_log",
+        description=(
+            "Read the swarm audit log: tickets created, which agent each was assigned to, started/"
+            "completed/failed/blocked (with failure codes), tool calls and token usage. "
+            "Omit run_id for the latest run. Use tail to limit the number of events returned."
+        ),
+    )
+    def swarm_get_run_log(run_id: str | None = None, tail: int = 100) -> str:
+        try:
+            cfg = SwarmConfig.from_env()
+            return json.dumps(read_run_log(cfg.log_dir, run_id=run_id, tail=tail), indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)}, indent=2)
+
+    @server.tool(
         name="swarm_get_worktree_diff",
         description=(
             "Review the isolated Git diff patch generated by a worker agent for a specific ticket. "
             "Use this to review code before approving a merge to main."
         ),
     )
-    def swarm_get_worktree_diff(ticket_id: str) -> str:
+    def swarm_get_worktree_diff(ticket_id: str, workspace: str | None = None) -> str:
+        repo_root = _workspace(workspace)
         clean_id = ticket_id.lower().replace("tick-", "")
         # Target worktree path
         wt_name = f"ticket-tick-{clean_id}"
-        worktree_path = REPO_ROOT / ".worktrees" / wt_name
+        worktree_path = repo_root / ".worktrees" / wt_name
         if not worktree_path.exists():
             # Check alternative naming
             wt_name = f"ticket-{clean_id}"
-            worktree_path = REPO_ROOT / ".worktrees" / wt_name
+            worktree_path = repo_root / ".worktrees" / wt_name
 
         if not worktree_path.exists():
             return json.dumps({
@@ -204,12 +249,13 @@ def create_mcp_server() -> MCPServer:
             "and prune the isolated worktree."
         ),
     )
-    def swarm_merge_worktree(ticket_id: str, target_branch: str = "main") -> str:
+    def swarm_merge_worktree(ticket_id: str, target_branch: str = "main", workspace: str | None = None) -> str:
         clean_id = ticket_id.lower().replace("tick-", "")
         formatted_id = f"TICK-{clean_id.upper()}"
         try:
-            merge_worktree(REPO_ROOT, formatted_id, target_branch=target_branch)
-            prune_worktrees(REPO_ROOT)
+            repo_root = _workspace(workspace)
+            merge_worktree(repo_root, formatted_id, target_branch=target_branch)
+            prune_worktrees(repo_root)
             return json.dumps({
                 "status": "MERGED",
                 "ticket_id": formatted_id,

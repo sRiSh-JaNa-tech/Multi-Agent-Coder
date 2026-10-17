@@ -32,16 +32,26 @@ You have two primary ways to dispatch tasks to the swarm:
 
 ### Method A: Native MCP Server Tools
 The workspace exposes the `MultiAgentCoderSwarm` MCP server with the following tools:
-1. `swarm_submit_dag(tickets, objective, max_agents)`:
+1. `swarm_submit_dag(tickets, objective, max_agents, workspace, token_limit)`:
    Submit an explicit DAG of tickets directly without relying on heuristic LLM breakdown.
-2. `swarm_dispatch_objective(objective, max_agents)`:
+2. `swarm_dispatch_objective(objective, max_agents, workspace, token_limit)`:
    Submit an objective and let the internal orchestrator decompose and execute it.
-3. `swarm_status()`:
-   Inspect active worktrees, branches, and worker queue depths.
-4. `swarm_get_worktree_diff(ticket_id)`:
+3. `swarm_status(workspace)`:
+   Inspect workspace, model, token limit, log dir, recent runs, worktrees and queue config.
+4. `swarm_get_run_log(run_id, tail)`:
+   Audit trail: tickets created/assigned/failed/blocked, tool calls, token usage.
+5. `swarm_get_worktree_diff(ticket_id, workspace)`:
    Fetch the exact Git diff generated in `.worktrees/ticket-<ticket_id>` for your architectural review.
-5. `swarm_merge_worktree(ticket_id, target_branch)`:
+6. `swarm_merge_worktree(ticket_id, target_branch, workspace)`:
    Merge the approved changes into `main` and clean up the worktree.
+
+> **Always pass `workspace` = the real target project (or set `TARGET_WORKSPACE` in `.env`).**
+> The swarm edits it in place. Never copy a project into this repo and never push a copied
+> project to this repo's remote. Workers cannot commit/push; you review and commit in the target repo.
+
+**Full operating manual** (agent naming, ticket template, DAG rules, token budget, failure codes,
+supervision loop): `python -m multi_agent_coder.orchestrator.brain_prompt` -
+[brain_prompt.py](../../../src/multi_agent_coder/orchestrator/brain_prompt.py). It is also served as the MCP server instructions.
 
 ### Method B: Headless CLI Runner (Background Tasks)
 When MCP is connecting or for batch terminal pipelines:

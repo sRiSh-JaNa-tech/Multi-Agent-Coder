@@ -40,6 +40,9 @@ class Ticket:
     result: str | None = None
     error: str | None = None
     error_log: str | None = None
+    failure_code: str | None = None    # e.g. ITERATION_LIMIT, TOKEN_BUDGET_EXHAUSTED, LLM_ERROR
+    tokens_used: int = 0
+    tool_calls: int = 0
 
     @classmethod
     def create(
@@ -72,10 +75,19 @@ class Ticket:
         self.result = result
         self.completed_at = time.time()
 
-    def mark_failed(self, error: str) -> None:
+    def mark_failed(self, error: str, code: str = "AGENT_ERROR") -> None:
         self.status = TicketStatus.FAILED
         self.error = error
         self.error_log = error
+        self.failure_code = code
+        self.completed_at = time.time()
+
+    def mark_blocked(self, reason: str, code: str = "DEPENDENCY_FAILED") -> None:
+        """The ticket will never run (failed upstream dependency or exhausted budget)."""
+        self.status = TicketStatus.BLOCKED
+        self.error = reason
+        self.error_log = reason
+        self.failure_code = code
         self.completed_at = time.time()
 
     @property

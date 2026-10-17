@@ -243,6 +243,9 @@ __marimo__/
 data/
 logs/
 
+# Target project workspaces (never copy into this repository)
+filewiz/
+**/filewiz/
 
 memory.json
 **/memory.json
