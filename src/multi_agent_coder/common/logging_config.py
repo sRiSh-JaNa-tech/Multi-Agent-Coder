@@ -17,7 +17,7 @@ def setup_logging(name: str = __name__, level: int = logging.INFO) -> logging.Lo
             rich_tracebacks=True,
             show_time=True,
             show_path=False,
-            markup=True,
+            markup=False,
         )
         formatter = logging.Formatter("%(message)s")
         handler.setFormatter(formatter)

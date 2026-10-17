@@ -273,7 +273,7 @@ class AgentWorker:
             logger.info("Agent [%s] RESOLVED ticket [%s] in %.2fs", self.agent_id, ticket.id, ticket.duration_seconds)
         except Exception as e:
             ticket.mark_failed(str(e))
-            logger.error("Agent [%s] FAILED ticket [%s]: %s", self.agent_id, ticket.id, e)
+            logger.error("Agent [%s] FAILED ticket [%s]: %s", self.agent_id, ticket.id, repr(str(e)))
 
         self.history.append(ticket)
         self.current_ticket = None

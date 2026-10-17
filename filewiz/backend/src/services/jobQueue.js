@@ -57,7 +57,7 @@ class JobQueue extends EventEmitter {
             this.emit('jobStatusUpdate', { jobId, status, data });
 
             if (status === 'COMPLETED' || status === 'FAILED') {
-                // Optionally remove from processing after a delay or when GC'd
+                // Optionally remove from processing after a delay or when GC\'d
                 // For simplicity here, we leave it and rely on the overall health check to manage it
                 // or a dedicated cleanup mechanism if memory becomes an issue.
                 // setTimeout(() => {
@@ -67,6 +67,19 @@ class JobQueue extends EventEmitter {
                 // }, 60000); // Remove after 1 minute
             }
         }
+    }
+
+    cancelJob(jobId) {
+        if (this.processing.has(jobId)) {
+            const jobState = this.processing.get(jobId);
+            if (jobState.status === 'PROCESSING' || jobState.status === 'PENDING') {
+                jobState.status = 'CANCELLED';
+                this.processing.set(jobId, jobState);
+                this.emit('jobCancelled', { jobId, status: 'CANCELLED' });
+                return true; // Indicate cancellation was successful
+            }
+        }
+        return false; // Indicate job not found or not in a cancellable state
     }
 
     getJobStatus(jobId) {

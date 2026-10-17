@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { signToken, verifyToken } = require('../utils/jwt');
+const accountLockout = require('../middlewares/accountLockout');
 
 // Session check endpoint
 router.get('/session', (req, res) => {
@@ -38,7 +39,7 @@ router.get('/me', (req, res) => {
 });
 
 // Login endpoint
-router.post('/login', async (req, res) => {
+router.post('/login', accountLockout, async (req, res) => {
     try {
         const { email, password } = req.body;
         if (!email || !password) {
@@ -47,6 +48,7 @@ router.post('/login', async (req, res) => {
 
         const user = await User.login(email, password);
         if (!user) {
+            if (req.incrementLoginFailure) req.incrementLoginFailure();
             return res.status(401).json({ error: "Invalid email or password" });
         }
 
@@ -70,6 +72,7 @@ router.post('/login', async (req, res) => {
             req.session.user = { email: user.email, name: user.name };
         }
 
+        if (req.resetLoginFailures) req.resetLoginFailures();
         return res.json({
             success: true,
             token,

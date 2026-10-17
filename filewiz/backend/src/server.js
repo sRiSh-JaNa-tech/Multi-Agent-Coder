@@ -60,7 +60,7 @@ const { router: jobRouter, jobQueueInstance } = require('./routes/jobRouter');
 
 // Health check endpoint for Kubernetes probes
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'filewiz-backend' });
+  res.json({ status: 'ok', service: 'filewiz-backend' });
 });
 
 // Deep health check & Kubernetes Liveness / Readiness Probes

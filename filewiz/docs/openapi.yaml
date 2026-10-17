@@ -1,0 +1,725 @@
+openapi: 3.1.0
+info:
+  title: FileWiz API Specification
+  version: 1.0.0
+  description: API for FileWiz services, including authentication, job management, file processing, and health checks.
+
+servers:
+  - url: /api/v1
+    description: Main API server
+
+paths:
+  /auth/signup:
+    post:
+      summary: User Sign Up
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "201":
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/UserResponse
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "409":
+          description: Username or email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseConflict
+
+  /auth/login:
+    post:
+      summary: User Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: User logged in successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/LoginResponse
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /auth/refresh:
+    post:
+      summary: Refresh Access Token
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/LoginResponse
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /auth/session:
+    get:
+      summary: Get Current Session Information
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Session information
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/SessionResponse
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /auth/me:
+    get:
+      summary: Get Current User Profile
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/UserResponse
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /auth/verify:
+    post:
+      summary: Verify Email Address
+      security:
+        - ApiKeyAuth: [] # Assuming API key is used for verification emails
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+      responses:
+        "200":
+          description: Email verified successfully
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /auth/protected/resource:
+    get:
+      summary: Access Protected Resource
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Protected resource data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+        "403":
+          $ref: '#'/components/schemas/ErrorResponseForbidden
+
+  /api/v1/jobs:
+    post:
+      summary: Submit a new job
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_url:
+                  type: string
+                  description: URL of the file to process
+                job_type:
+                  type: string
+                  enum: ["compress_pdf", "compress_ppt", "split_pdf", "redact", "repair", "peek"]
+                  description: Type of job to perform
+                parameters:
+                  type: object
+                  description: Optional parameters specific to the job type
+      responses:
+        "201":
+          description: Job submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/JobResponse
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+    get:
+      summary: Get a list of all jobs
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: ["pending", "processing", "completed", "failed"]
+          description: Filter jobs by status
+      responses:
+        "200":
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#'/components/schemas/JobResponse
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /api/v1/jobs/{job_id}:
+    get:
+      summary: Get job status by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema:
+            type: string
+          description: The ID of the job to retrieve
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/JobResponse
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseNotFound
+    delete:
+      summary: Cancel a job
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema:
+            type: string
+          description: The ID of the job to cancel
+      responses:
+        "204":
+          description: Job cancelled successfully
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseNotFound
+
+  /file/compress/pdf:
+    post:
+      summary: Compress PDF file
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                quality:
+                  type: integer
+                  description: Compression quality (0-100)
+                  default: 80
+      responses:
+        "200":
+          description: PDF compressed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  compressed_file_url:
+                    type: string
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /file/compress/ppt:
+    post:
+      summary: Compress PPT file
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                quality:
+                  type: integer
+                  description: Compression quality (0-100)
+                  default: 80
+      responses:
+        "200":
+          description: PPT compressed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  compressed_file_url:
+                    type: string
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /file/split/pdf:
+    post:
+      summary: Split PDF file
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                pages_per_file:
+                  type: integer
+                  description: Number of pages per output file
+      responses:
+        "200":
+          description: PDF split successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  split_files_urls:
+                    type: array
+                    items:
+                      type: string
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /file/redaction:
+    post:
+      summary: Redact content from a file
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                redactions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      page:
+                        type: integer
+                      coordinates:
+                        type: array
+                        items:
+                          type: integer # [x1, y1, x2, y2]
+      responses:
+        "200":
+          description: Content redacted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redacted_file_url:
+                    type: string
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /file/repair:
+    post:
+      summary: Repair a corrupted file
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: File repaired successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repaired_file_url:
+                    type: string
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /file/peek:
+    post:
+      summary: Peek into a file's content
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: File content peeked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  peeked_content:
+                    type: string
+        "400":
+          $ref: '#'/components/schemas/ErrorResponseBadRequest
+        "401":
+          $ref: '#'/components/schemas/ErrorResponseUnauthorized
+
+  /health:
+    get:
+      summary: Health Check
+      description: General health check endpoint.
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["healthy"]
+        "503":
+          description: Service is not healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseServiceUnavailable
+
+  /health/liveness:
+    get:
+      summary: Liveness Probe
+      description: Checks if the service is running.
+      responses:
+        "200":
+          description: Service is live.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["live"]
+        "503":
+          description: Service is not live.
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseServiceUnavailable
+
+  /health/readiness:
+    get:
+      summary: Readiness Probe
+      description: Checks if the service is ready to accept traffic.
+      responses:
+        "200":
+          description: Service is ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["ready"]
+        "503":
+          description: Service is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseServiceUnavailable
+
+  /health/deep:
+    get:
+      summary: Deep Health Check
+      description: Performs a comprehensive check of all service dependencies.
+      responses:
+        "200":
+          description: Service and all dependencies are healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["healthy"]
+                  dependencies:
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum: ["healthy", "unhealthy"]
+        "503":
+          description: Service or one of its dependencies is unhealthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#'/components/schemas/ErrorResponseServiceUnavailable
+
+components:
+  schemas:
+    UserResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+    SessionResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        is_authenticated:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+    JobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+        file_url:
+          type: string
+        job_type:
+          type: string
+        status:
+          type: string
+          enum: ["pending", "processing", "completed", "failed"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        result_url:
+          type: string
+          nullable: true
+
+    ErrorResponseBadRequest:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Bad Request"
+        message:
+          type: string
+          example: "Invalid input data provided."
+        code:
+          type: integer
+          example: 400
+
+    ErrorResponseUnauthorized:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Unauthorized"
+        message:
+          type: string
+          example: "Authentication token is missing or invalid."
+        code:
+          type: integer
+          example: 401
+
+    ErrorResponseForbidden:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Forbidden"
+        message:
+          type: string
+          example: "User does not have permission to perform this action."
+        code:
+          type: integer
+          example: 403
+
+    ErrorResponseNotFound:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Not Found"
+        message:
+          type: string
+          example: "The requested resource was not found."
+        code:
+          type: integer
+          example: 404
+
+    ErrorResponseConflict:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Conflict"
+        message:
+          type: string
+          example: "A resource with the same identifier already exists."
+        code:
+          type: integer
+          example: 409
+
+    ErrorResponseTooManyRequests:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Too Many Requests"
+        message:
+          type: string
+          example: "Rate limit exceeded. Please try again later."
+        code:
+          type: integer
+          example: 429
+
+    ErrorResponseServiceUnavailable:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Service Unavailable"
+        message:
+          type: string
+          example: "The service is temporarily unavailable. Please try again later."
+        code:
+          type: integer
+          example: 503
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key # Or a more descriptive name if applicable
