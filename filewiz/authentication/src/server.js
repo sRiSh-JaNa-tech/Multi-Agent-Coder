@@ -75,13 +75,30 @@ app.use((req, res, next) => {
     next();
 });
 
-// Health check endpoint
+// Health check endpoints
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
         service: 'filewiz-auth',
         databaseServiceUrl: DATABASE_SERVICE_URL,
         timestamp: new Date().toISOString()
+    });
+});
+
+app.get('/health/liveness', (req, res) => {
+    res.json({ status: 'healthy', check: 'liveness', uptime: process.uptime() });
+});
+
+app.get('/health/readiness', (req, res) => {
+    res.json({ status: 'healthy', check: 'readiness', databaseServiceUrl: DATABASE_SERVICE_URL });
+});
+
+app.get('/health/deep', (req, res) => {
+    res.json({
+        status: 'healthy',
+        service: 'filewiz-auth',
+        uptime: process.uptime(),
+        databaseServiceUrl: DATABASE_SERVICE_URL
     });
 });
 

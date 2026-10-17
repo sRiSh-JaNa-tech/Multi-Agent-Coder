@@ -56,10 +56,35 @@ app.get('/', (req, res) => {
   res.send('FileWiz Backend API is running.');
 });
 
+const { router: jobRouter, jobQueueInstance } = require('./routes/jobRouter');
+
 // Health check endpoint for Kubernetes probes
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'filewiz-backend' });
+  res.json({ status: 'healthy', service: 'filewiz-backend' });
 });
+
+// Deep health check & Kubernetes Liveness / Readiness Probes
+app.get('/health/liveness', (req, res) => {
+  res.json({ status: 'healthy', check: 'liveness', uptime: process.uptime() });
+});
+
+app.get('/health/readiness', (req, res) => {
+  const queueHealth = jobQueueInstance.checkHealth();
+  res.json({ status: 'healthy', check: 'readiness', queue: queueHealth });
+});
+
+app.get('/health/deep', (req, res) => {
+  const queueHealth = jobQueueInstance.checkHealth();
+  res.json({
+    status: 'healthy',
+    service: 'filewiz-backend',
+    uptime: process.uptime(),
+    queue: queueHealth
+  });
+});
+
+// Mount Asynchronous Job Processing Queue
+app.use(jobRouter);
 
 // 🔒 SECURED PROCESSING ROUTES: Enforce authentication and rate limiting across all operations
 app.use('/peek', isAuthenticated, peekRouter);

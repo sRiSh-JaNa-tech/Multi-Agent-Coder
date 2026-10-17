@@ -3,6 +3,7 @@ const { runDatabaseTests } = require('./database.test');
 const { runAuthTests } = require('./auth.test');
 const { runBackendTests } = require('./backend.test');
 const { runIntegrationTests } = require('./integration.test');
+const { runSecurityAndScalabilityTests } = require('./security_and_scalability.test');
 
 async function runAllTests() {
   const startTime = Date.now();
@@ -28,6 +29,9 @@ async function runAllTests() {
     // 5. Suite 4: End-to-End Cross-Microservice Integration
     await runIntegrationTests();
 
+    // 6. Suite 5: Security Hardening & Async Scalability
+    await runSecurityAndScalabilityTests();
+
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`${colors.green}${colors.bold}================================================================`);
     console.log(`  🎉 ALL TEST SUITES PASSED SUCCESSFULLY! (${duration}s)`);
@@ -35,7 +39,8 @@ async function runAllTests() {
     console.log(`  - Authentication Service:  15/15 tests passed`);
     console.log(`  - Backend & Security:      13/13 tests passed`);
     console.log(`  - Cross-Service E2E Flow:   7/7 steps passed`);
-    console.log(`  - Total Checks:            45 passed, 0 failed`);
+    console.log(`  - Security & Scalability:   8/8 tests passed`);
+    console.log(`  - Total Checks:            53 passed, 0 failed`);
     console.log(`================================================================${colors.reset}\n`);
 
   } catch (err) {

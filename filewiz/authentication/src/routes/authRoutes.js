@@ -133,6 +133,53 @@ router.post('/verify', (req, res) => {
     }
 });
 
+// Refresh token rotation endpoint
+router.post('/refresh', (req, res) => {
+    const token = req.body.refreshToken || req.cookies.refresh_token || req.body.token;
+    if (!token) {
+        return res.status(400).json({ error: "Refresh token is required" });
+    }
+    try {
+        const decoded = verifyToken(token);
+        const newPayload = { id: decoded.id, email: decoded.email, name: decoded.name };
+        const newToken = signToken(newPayload);
+        const newRefreshToken = signToken(newPayload);
+
+        res.cookie('auth_token', newToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000
+        });
+
+        return res.json({
+            success: true,
+            token: newToken,
+            refreshToken: newRefreshToken,
+            user: newPayload
+        });
+    } catch (err) {
+        return res.status(401).json({ error: "Invalid or expired refresh token" });
+    }
+});
+
+const apiKeyAuth = require('../middlewares/apiKeyAuth');
+const rateLimiter = require('../middlewares/rateLimiter');
+
+// API Key Protected resource
+router.get('/protected/resource', apiKeyAuth, (req, res) => {
+    res.json({
+        success: true,
+        message: "Access granted via API Key",
+        apiKeyData: req.apiKeyData
+    });
+});
+
+// Rate-limited resource
+router.get('/some/endpoint', rateLimiter, (req, res) => {
+    res.json({ success: true, message: "OK" });
+});
+
 // ── Administrative / Internal Protected Endpoints ──────────────────
 function requireAdmin(req, res, next) {
     const adminKey = process.env.ADMIN_KEY || process.env.INTERNAL_SERVICE_KEY || 'filewiz-internal-db-secret';
