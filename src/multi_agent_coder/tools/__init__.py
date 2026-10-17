@@ -7,7 +7,20 @@ from .memory import MEMORY_TOOLS, execute_recall_memory, execute_save_memory
 from .repo import REPO_TOOLS, execute_clone_and_index, execute_list_repos, find_repo_path, normalize_collection_name
 from .search import SEARCH_TOOLS, execute_grep, execute_search_code
 from .coding import CODING_TOOLS, execute_create_file, execute_replace_file_content, execute_write_file
-from .execution import EXECUTION_TOOLS, execute_check_syntax, execute_git_diff, execute_git_status, execute_run_command
+from .execution import (
+    EXECUTION_TOOLS,
+    GIT_TOOLS,
+    execute_check_syntax,
+    execute_git_diff,
+    execute_git_status,
+    execute_run_command,
+    execute_git_pull,
+    execute_git_push,
+    execute_git_commit,
+    execute_git_add,
+    execute_git_branch,
+    execute_git_log,
+)
 from .outline import OUTLINE_TOOLS, execute_get_file_outline
 
 __all__ = [
@@ -34,6 +47,13 @@ __all__ = [
     "execute_run_command",
     "execute_git_diff",
     "execute_git_status",
+    "execute_git_log",
+    "execute_git_branch",
+    "execute_git_add",
+    "execute_git_commit",
+    "execute_git_push",
+    "execute_git_pull",
+    "GIT_TOOLS",
     "execute_check_syntax",
     "execute_get_file_outline",
     "find_repo_path",

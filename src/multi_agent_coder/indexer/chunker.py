@@ -48,6 +48,12 @@ SKIP_DIRS = {
     ".mypy_cache",
     ".ruff_cache",
     "egg-info",
+    "repos",
+    ".worktrees",
+    ".pytest_cache",
+    ".gemini",
+    ".vscode",
+    ".idea",
 }
 
 # Max lines per chunk for non-Python files

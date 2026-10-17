@@ -67,11 +67,18 @@ helps software engineers explore, understand, modify, and test codebases.
 - Writing/overwriting files: write_file
 - Surgical unique block replacement: replace_file_content
 
-### 3. Verification & Execution
-- Validating Python/JSON syntax: check_syntax
-- Running terminal commands & tests: run_command
+### 3. Git Operations & Repository Control
+- Pulling latest remote changes: git_pull
+- Pushing commits to remote: git_push
+- Staging and creating commits: git_commit, git_add
+- Branch listing and switching: git_branch
+- Commit log history: git_log
 - Inspecting git diff: git_diff
 - Inspecting git status: git_status
+
+### 4. Verification & Terminal Execution
+- Validating Python/JSON syntax: check_syntax
+- Running shell commands, tests & scripts: run_command
 
 ### 4. Memory
 - Saving architectural patterns & preferences: save_memory
@@ -134,7 +141,13 @@ class CodeNavigatorAgent:
     """
     _active_instances: set = set()
 
-    def __init__(self, model: str = MODEL, console: Console | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str = MODEL,
+        console: Console | None = None,
+        api_key: str | None = None,
+        workspace_root: Path | str | None = None,
+    ) -> None:
         max_agents = get_max_agents()
         if len(CodeNavigatorAgent._active_instances) >= max_agents:
             msg = (
@@ -148,6 +161,7 @@ class CodeNavigatorAgent:
 
         self.console = console or Console()
         self.ui = ConsoleUI(console=self.console)
+        self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd()
         self.api_key = api_key or ensure_api_key(self.console)
         self.client = genai.Client(api_key=self.api_key)
         self.model = model
@@ -326,18 +340,21 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Codebase Navigator Agent")
     parser.add_argument("-p", "--prompt", type=str, help="Single prompt to execute directly")
-    parser.add_argument("-r", "--repo", type=str, help="Repository to explore (e.g. '.' or 'pallets/flask')")
+    parser.add_argument("-r", "--repo", type=str, help="Repository or directory to explore (e.g. '.' or 'pallets/flask')")
+    parser.add_argument("-d", "--dir", type=str, help="Target directory to open and work in (default: '.')")
     cli_args, _ = parser.parse_known_args()
 
     console = Console()
     ui = ConsoleUI(console=console)
     api_key = ensure_api_key(console)
-    agent = CodeNavigatorAgent(model=MODEL, console=console, api_key=api_key)
 
     # 1. Direct one-shot prompt execution
     if cli_args.prompt:
-        repo = cli_args.repo or "."
-        ui.display_app_banner(repo=repo)
+        target = cli_args.dir or cli_args.repo or "."
+        target_path = Path(target).expanduser().resolve()
+        display_target = str(target_path) if target_path.is_dir() else target
+        agent = CodeNavigatorAgent(model=MODEL, console=console, api_key=api_key, workspace_root=target_path if target_path.is_dir() else None)
+        ui.display_app_banner(repo=display_target)
         console.print(f"[bold green]User Prompt:[/bold green] {cli_args.prompt}\n")
         response = agent.chat(cli_args.prompt, console)
         if response:
@@ -345,22 +362,32 @@ def main() -> None:
         agent.token_tracker.report()
         return
 
-    # 2. Interactive Menu & Loop
+    # 2. Interactive Directory Selection (Defaults to current directory '.')
     ui.display_app_banner()
 
-    repo = cli_args.repo or interactive_menu(
-        console,
-        SUGGESTED_REPOS,
-        title="Select a Repo to Explore",
-        allow_custom=True,
-        custom_prompt="Enter owner/repo (e.g., pallets/flask)",
-    )
-    if not repo:
-        return
+    target = cli_args.dir or cli_args.repo
+    if not target:
+        cwd_display = str(Path.cwd())
+        console.print(f"[bold cyan]Target Workspace Directory[/bold cyan] [dim](Press Enter for current directory '.', or enter custom path/repo)[/dim]: ", end="")
+        try:
+            user_choice = input().strip()
+            target = user_choice if user_choice else "."
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Exiting.[/yellow]")
+            return
 
-    ui.display_app_banner(repo=repo)
-    console.print(f"\n[bold green]Indexing:[/bold green] {repo}")
-    response = agent.chat(f"index the repo {repo}", console)
+    target_path = Path(target).expanduser().resolve()
+    if target_path.is_dir():
+        display_target = str(target_path)
+        workspace_root = target_path
+    else:
+        display_target = target
+        workspace_root = None
+
+    agent = CodeNavigatorAgent(model=MODEL, console=console, api_key=api_key, workspace_root=workspace_root)
+    ui.display_app_banner(repo=display_target)
+    console.print(f"\n[bold green]Opening and indexing:[/bold green] {display_target}")
+    response = agent.chat(f"index the repo {target}", console)
     if response:
         ui.display_agent_response("Navigator", response)
 

@@ -93,9 +93,10 @@ def find_repo_path(repo: str) -> Path | None:
 
 def resolve_repo_path(repo: str) -> tuple[Path, str, bool]:
     """Resolve repo to a local path. Returns (path, collection_name, needs_clone)."""
-    local_path = Path(repo).expanduser()
+    local_path = Path(repo).expanduser().resolve()
     if local_path.is_dir():
-        name = "local-" + local_path.name
+        folder_name = local_path.name or "workspace"
+        name = "local-" + folder_name
         return local_path, normalize_collection_name(name), False
 
     # Treat as GitHub repo

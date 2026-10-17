@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from typing import Callable, Any
 from google import genai
 from google.genai import types
@@ -36,8 +37,10 @@ class MainOrchestrator:
         queue_limit_per_agent: int = 3,
         model: str = "gemini-2.5-flash-lite",
         api_key: str | None = None,
+        workspace_root: Path | str | None = None,
     ) -> None:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd()
         self.model = model
         self.queue_limit_per_agent = queue_limit_per_agent
         
@@ -93,6 +96,7 @@ class MainOrchestrator:
                 queue_limit=self.queue_limit_per_agent,
                 model=self.model,
                 api_key=self.api_key,
+                workspace_root=self.workspace_root,
             )
             self.agents.append(worker)
 

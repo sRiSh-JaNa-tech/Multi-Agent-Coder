@@ -125,7 +125,80 @@ def _get_target_root(tool_input: dict[str, Any], workspace_root: Path | None = N
     return Path.cwd()
 
 
+
+GIT_TOOLS = [
+    {
+        "name": "git_pull",
+        "description": "Pull latest changes from a remote Git repository into the workspace.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remote": {"type": "string", "description": "Remote name (default: origin).", "default": "origin"},
+                "branch": {"type": "string", "description": "Optional branch name to pull."},
+            },
+        },
+    },
+    {
+        "name": "git_push",
+        "description": "Push committed changes to a remote Git repository.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remote": {"type": "string", "description": "Remote name (default: origin).", "default": "origin"},
+                "branch": {"type": "string", "description": "Optional branch name to push."},
+                "set_upstream": {"type": "boolean", "description": "Whether to pass -u / --set-upstream.", "default": False},
+            },
+        },
+    },
+    {
+        "name": "git_commit",
+        "description": "Commit staged or modified changes to the Git repository with a message.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Commit message."},
+                "stage_all": {"type": "boolean", "description": "Automatically stage all modified and new files (default: True).", "default": True},
+                "files": {"type": "array", "items": {"type": "string"}, "description": "Optional specific list of files to commit."},
+            },
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "git_add",
+        "description": "Stage files in the Git index for committing.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "files": {"type": "string", "description": "Files to stage (default: '.' for all).", "default": "."},
+            },
+        },
+    },
+    {
+        "name": "git_branch",
+        "description": "List, create, or switch Git branches.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "create", "checkout"], "description": "Action: list, create, or checkout.", "default": "list"},
+                "branch_name": {"type": "string", "description": "Branch name (required for create and checkout)."},
+            },
+        },
+    },
+    {
+        "name": "git_log",
+        "description": "Show recent Git commit history.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Number of commits to show (default: 10).", "default": 10},
+            },
+        },
+    },
+]
+
 EXECUTION_TOOLS = [
+    *GIT_TOOLS,
+
     {
         "name": "run_command",
         "description": "Run a non-interactive shell command in the repository with a timeout.",
@@ -228,3 +301,92 @@ def execute_git_status(tool_input: dict[str, Any], workspace_root: Path | None =
     cmd = ["git", "status", "--short"]
     res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=10)
     return res.stdout if res.stdout else "Clean working tree (no changes)."
+
+
+def execute_git_pull(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    remote = tool_input.get("remote", "origin")
+    branch = tool_input.get("branch")
+    cmd = ["git", "pull", remote]
+    if branch:
+        cmd.append(branch)
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=45)
+    out = res.stdout or res.stderr or "Pull completed."
+    return f"Git Pull (Exit {res.exit_code}):\n{out.strip()}"
+
+
+def execute_git_push(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    remote = tool_input.get("remote", "origin")
+    branch = tool_input.get("branch")
+    cmd = ["git", "push"]
+    if tool_input.get("set_upstream"):
+        cmd.append("-u")
+    if remote:
+        cmd.append(remote)
+    if branch:
+        cmd.append(branch)
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=45)
+    out = res.stdout or res.stderr or "Push completed."
+    return f"Git Push (Exit {res.exit_code}):\n{out.strip()}"
+
+
+def execute_git_commit(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    message = tool_input.get("message", "").strip()
+    if not message:
+        return "Error: 'message' parameter is required for git_commit."
+
+    files = tool_input.get("files")
+    stage_all = tool_input.get("stage_all", True)
+    if files:
+        file_list = [str(f) for f in files] if isinstance(files, list) else [str(files)]
+        run_sandboxed_command(["git", "add"] + file_list, cwd=root, timeout_seconds=15)
+    elif stage_all:
+        run_sandboxed_command(["git", "add", "-A"], cwd=root, timeout_seconds=15)
+
+    cmd = ["git", "commit", "-m", message]
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=20)
+    out = res.stdout or res.stderr or "Commit finished."
+    return f"Git Commit (Exit {res.exit_code}):\n{out.strip()}"
+
+
+def execute_git_add(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    files = tool_input.get("files", ".")
+    file_list = [str(f) for f in files] if isinstance(files, list) else [str(files)]
+    cmd = ["git", "add"] + file_list
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=15)
+    if res.exit_code == 0:
+        return f"Staged {', '.join(file_list)} successfully."
+    return f"Git Add (Exit {res.exit_code}):\n{res.stderr or res.stdout}"
+
+
+def execute_git_branch(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    action = tool_input.get("action", "list").lower()
+    branch_name = tool_input.get("branch_name", "").strip()
+    if action == "list":
+        cmd = ["git", "branch", "-a"]
+    elif action == "create":
+        if not branch_name:
+            return "Error: 'branch_name' parameter is required when action='create'."
+        cmd = ["git", "checkout", "-b", branch_name]
+    elif action == "checkout":
+        if not branch_name:
+            return "Error: 'branch_name' parameter is required when action='checkout'."
+        cmd = ["git", "checkout", branch_name]
+    else:
+        return f"Error: Unknown action '{action}'. Must be 'list', 'create', or 'checkout'."
+
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=15)
+    out = res.stdout or res.stderr or "Branch operation completed."
+    return out.strip()
+
+
+def execute_git_log(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    limit = int(tool_input.get("limit", 10))
+    cmd = ["git", "log", "-n", str(limit), "--oneline"]
+    res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=15)
+    return res.stdout if res.stdout else (res.stderr or "No git commit history found.")
