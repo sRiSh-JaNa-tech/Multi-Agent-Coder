@@ -18,10 +18,12 @@ try:
     from orchestrator.ticket import Ticket, TicketStatus
     from orchestrator.prompts import build_worker_system_instruction, build_ticket_execution_prompt
     from common.logging_config import setup_logging
+    from security.permissions import SecurityContext
 except ImportError:
     from .ticket import Ticket, TicketStatus
     from .prompts import build_worker_system_instruction, build_ticket_execution_prompt
     from ..common.logging_config import setup_logging
+    from ..security.permissions import SecurityContext
 
 from ..common.config import DEFAULT_MODEL, first_env
 from ..common.token_budget import TokenBudget, TokenBudgetExceeded, usage_from_response
@@ -81,6 +83,21 @@ def _max_iterations() -> int:
         return 20
 
 
+def _calculate_max_iterations(ticket: Any = None) -> int:
+    """Dynamically scale iteration budget based on ticket complexity, category, and target files."""
+    base = _max_iterations()
+    if not ticket:
+        return base
+    cat = (getattr(ticket, "category", "") or "").lower()
+    target_files = getattr(ticket, "target_files", []) or []
+    depends_on = getattr(ticket, "depends_on", []) or []
+    if cat in ("refactor", "coding") or len(target_files) > 1 or len(depends_on) > 1:
+        return max(base, 40)
+    elif cat in ("testing", "qa"):
+        return max(base, 30)
+    return base
+
+
 def _is_transient(exc: Exception) -> bool:
     """True for overload / rate-limit / server errors that are worth retrying."""
     code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
@@ -100,8 +117,9 @@ def _describe_call(name: str, args: Any) -> str | None:
     if not isinstance(args, dict):
         return None
     for key in (
-        "filepath", "file_path", "target_file", "path", "file", "filename",
-        "command", "cmd", "pattern", "query", "dir_path", "directory", "branch_name"
+        "filepath", "file_path", "target_file", "relative_path", "path", "file", "filename",
+        "command", "cmd", "pattern", "query", "dir_path", "directory", "branch_name",
+        "ticket_id", "symbol", "code", "objective"
     ):
         value = args.get(key)
         if value:
@@ -109,14 +127,20 @@ def _describe_call(name: str, args: Any) -> str | None:
     inner = args.get("tool_input")
     if isinstance(inner, dict):
         for key in (
-            "filepath", "file_path", "target_file", "path", "file", "filename",
-            "command", "cmd", "pattern", "query", "dir_path", "directory", "branch_name"
+            "filepath", "file_path", "target_file", "relative_path", "path", "file", "filename",
+            "command", "cmd", "pattern", "query", "dir_path", "directory", "branch_name",
+            "ticket_id", "symbol", "code", "objective"
         ):
             val = inner.get(key)
             if val:
                 return str(val)[:200]
     elif isinstance(inner, str):
         return inner[:200]
+
+    # Non-body argument fallback
+    non_body = {k: v for k, v in args.items() if k not in ("content", "target_content", "replacement_content")}
+    if non_body:
+        return str(non_body)[:200]
     return None
 
 
@@ -162,6 +186,12 @@ class AgentWorker:
         self.queue: list[Ticket] = []
         self.current_ticket: Ticket | None = None
         self.history: list[Ticket] = []
+
+        self.security_context = (
+            SecurityContext.for_tester(self.workspace_root)
+            if self.is_tester
+            else SecurityContext.for_worker(self.workspace_root)
+        )
 
         # Client initialized on demand or passed
         self._client: genai.Client | None = None
@@ -303,6 +333,7 @@ class AgentWorker:
             )
 
         root = self.workspace_root
+        sec_ctx = getattr(self, "security_context", None)
         dispatch = {
             "run_command": lambda inp: execute_run_command(inp, workspace_root=root),
             "check_syntax": lambda inp: execute_check_syntax(inp, workspace_root=root),
@@ -316,13 +347,13 @@ class AgentWorker:
             "git_log": lambda inp: execute_git_log(inp, workspace_root=root),
             # File tools are pinned to the target workspace: edits happen in place, never in a copy.
             "read_file": lambda inp: execute_read_file(None, inp, workspace_root=root),
-            "write_file": lambda inp: execute_write_file(inp, workspace_root=root),
-            "replace_file_content": lambda inp: execute_replace_file_content(inp, workspace_root=root),
-            "create_file": lambda inp: execute_create_file(inp, workspace_root=root),
+            "write_file": lambda inp: execute_write_file(inp, workspace_root=root, security_context=sec_ctx),
+            "replace_file_content": lambda inp: execute_replace_file_content(inp, workspace_root=root, security_context=sec_ctx),
+            "create_file": lambda inp: execute_create_file(inp, workspace_root=root, security_context=sec_ctx),
             "list_directory": lambda inp: execute_list_directory(None, inp, workspace_root=root),
             "find_files": lambda inp: execute_find_files(None, inp, workspace_root=root),
             "grep": lambda inp: execute_grep(tool_input=inp, workspace_root=root),
-            "search_code": lambda inp: execute_search_code(None, None, inp),
+            "search_code": lambda inp: execute_search_code(None, None, inp, workspace_root=root),
             "get_file_outline": lambda inp: execute_get_file_outline(inp, workspace_root=root),
             "save_memory": lambda inp: execute_save_memory(None, inp),
             "recall_memory": lambda inp: execute_recall_memory(None, inp),
@@ -433,11 +464,11 @@ class AgentWorker:
         )
 
         messages = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-        max_iterations = _max_iterations()
+        max_iterations = _calculate_max_iterations(ticket)
         guard = ExecutionGuard(max_tokens=10**12, max_identical_calls=IDENTICAL_CALL_LIMIT)
         pseudo_call_strikes = 0
 
-        for _ in range(max_iterations):
+        for iteration_idx in range(max_iterations):
             response = self._generate(messages, system_instruction, worker_tools, ticket)
             if not response.candidates or not response.candidates[0].content:
                 raise AgentFailure("EMPTY_RESPONSE", "Model returned no content (possibly blocked).")
@@ -489,9 +520,13 @@ class AgentWorker:
                 res = self._execute_tool(fc.name, call_args)
                 res_str = str(res)
                 action_status = "error" if res_str.lower().startswith("error") else "success"
-                ticket.record_action(tool=fc.name, detail=detail, status=action_status)
+                if action_status == "error":
+                    logger.warning("Agent [%s] tool %s returned error: %s", self.agent_id, fc.name, res_str[:200])
+                ticket.record_action(tool=fc.name, detail=detail, status=action_status, output=res_str[:300])
                 if self.run_logger and hasattr(self.run_logger, "action_completed"):
-                    self.run_logger.action_completed(self.agent_id, ticket.id, fc.name, detail, action_status)
+                    self.run_logger.action_completed(
+                        self.agent_id, ticket.id, fc.name, detail, action_status, output=res_str[:300]
+                    )
 
                 if fc.name in MUTATING_TOOLS and res_str.startswith("Successfully"):
                     guard.reset_call_counts()
@@ -503,6 +538,25 @@ class AgentWorker:
                         )
                     )
                 )
+
+            # Forced landing notification when nearing iteration limit
+            remaining = max_iterations - (iteration_idx + 1)
+            if remaining in (2, 3):
+                forced_landing_notice = (
+                    f"\n\n[CRITICAL WARNING: FORCED LANDING PROTOCOL INITIATED]\n"
+                    f"You have used {iteration_idx + 1} of {max_iterations} allowed iterations ({remaining} remaining).\n"
+                    f"DO NOT initiate any new file edits or directory searches. "
+                    f"Run final syntax/test checks if needed, and immediately output your final resolution report "
+                    f"with [Agent Status: RESOLVED] (or FAILED if incomplete) to conclude the ticket."
+                )
+                tool_responses.append(types.Part(text=forced_landing_notice))
+            elif remaining == 1:
+                forced_landing_notice = (
+                    f"\n\n[FINAL ITERATION WARNING]\n"
+                    f"This is your FINAL allowed iteration. Output your complete [Agent Status: RESOLVED] report NOW."
+                )
+                tool_responses.append(types.Part(text=forced_landing_notice))
+
             messages.append(types.Content(role="user", parts=tool_responses))
 
         raise AgentFailure(

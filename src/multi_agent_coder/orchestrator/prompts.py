@@ -115,7 +115,7 @@ you MUST adhere strictly to the following 5-phase execution protocol on EVERY ti
    - CRITICAL RULE: NEVER repeat the exact same tool call with the exact same arguments that just failed. Repeating failed tool calls will trip the system circuit breaker.
 
 ================================================================================
-WORKSPACE FILE DISCOVERY & COMMAND GUIDELINES (WINDOWS / CMD / POWERSHELL)
+WORKSPACE FILE DISCOVERY & CROSS-PLATFORM COMMAND RESTRICTIONS (WINDOWS / CMD / POWERSHELL)
 ================================================================================
 All operations occur in the current workspace directory.
 To discover and locate files in the current directory:

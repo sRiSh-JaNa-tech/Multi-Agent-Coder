@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..common.logging_config import setup_logging
+from ..security.permissions import AgentCapability, SecurityContext # Import security modules
 
 logger = setup_logging(__name__)
 
@@ -27,7 +28,14 @@ def resolve_safe_path(workspace_root: Path, relative_path: str) -> Path:
     """
     root = workspace_root.resolve()
     target = (root / relative_path).resolve()
-    if not target.is_relative_to(root):
+    abs_filepath = os.path.abspath(target)
+    abs_workspace_root = os.path.abspath(root)
+    
+    # Use os.path.commonpath to ensure it's a subpath
+    common = os.path.commonpath([abs_workspace_root, abs_filepath])
+    
+    # If the common path is the workspace root, then the filepath is within the workspace
+    if common != abs_workspace_root:
         raise PermissionError(f"Path traversal blocked: '{relative_path}' escapes workspace root.")
     return target
 
@@ -142,12 +150,46 @@ CODING_TOOLS = [
 ]
 
 
-def execute_create_file(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+def _normalize_file_content(content: str) -> str:
+    """
+    Normalize file content, unescaping accidental raw literal newlines/tabs from LLM responses
+    and stripping surrounding markdown code fences if erroneously included.
+    """
+    if not content:
+        return content
+
+    stripped = content.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 2:
+            content = "\n".join(lines[1:-1])
+
+    if "\\n" in content and "\n" not in content:
+        try:
+            content = content.encode("utf-8").decode("unicode_escape")
+        except Exception:
+            content = content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    elif "\\r\\n" in content and "\r\n" not in content and "\n" not in content:
+        try:
+            content = content.encode("utf-8").decode("unicode_escape")
+        except Exception:
+            content = content.replace("\\r\\n", "\n").replace("\\n", "\n")
+
+    return content
+
+
+def execute_create_file(tool_input: dict[str, Any], workspace_root: Path | None = None, security_context: SecurityContext | None = None) -> str:
     root = _get_target_root(tool_input, workspace_root)
     filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
-    content = tool_input.get("content", "")
+    raw_content = tool_input.get("content", "")
     if not filepath:
         return "Error: 'filepath' parameter is required."
+
+    content = _normalize_file_content(raw_content)
+
+    if security_context:
+        security_context.assert_capability(AgentCapability.WORKSPACE_WRITE)
+        security_context.assert_path_within_workspace(os.path.join(root, filepath))
 
     try:
         target = resolve_safe_path(root, filepath)
@@ -157,29 +199,67 @@ def execute_create_file(tool_input: dict[str, Any], workspace_root: Path | None 
     if target.exists():
         return f"Error: File already exists at {filepath}. Use replace_file_content or write_file."
 
+    if target.suffix == ".py":
+        try:
+            ast.parse(content, filename=filepath)
+        except SyntaxError as syn_err:
+            return (
+                f"Rejected create_file: Content introduces SyntaxError at line {syn_err.lineno}: {syn_err.msg}. "
+                f"Ensure valid Python code is provided without literal escape artifacts."
+            )
+
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Successfully created {filepath} ({len(content.splitlines())} lines)"
 
 
-def execute_write_file(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+def execute_write_file(tool_input: dict[str, Any], workspace_root: Path | None = None, security_context: SecurityContext | None = None) -> str:
     root = _get_target_root(tool_input, workspace_root)
     filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
-    content = tool_input.get("content", "")
+    raw_content = tool_input.get("content", "")
     if not filepath:
         return "Error: 'filepath' parameter is required."
+
+    content = _normalize_file_content(raw_content)
+
+    if security_context:
+        security_context.assert_capability(AgentCapability.WORKSPACE_WRITE)
+        security_context.assert_path_within_workspace(os.path.join(root, filepath))
 
     try:
         target = resolve_safe_path(root, filepath)
     except PermissionError as e:
         return f"Error: {e}"
 
+    # Anti-collapse protection for existing files
+    if target.exists():
+        try:
+            existing_lines = len(target.read_text(encoding="utf-8", errors="ignore").splitlines())
+        except Exception:
+            existing_lines = 0
+        new_lines = len(content.splitlines())
+        if existing_lines > 30 and new_lines <= 2:
+            return (
+                f"Rejected full-file overwrite: Target '{filepath}' has {existing_lines} lines, "
+                f"but provided content has only {new_lines} line(s) (likely due to newline escaping or truncated output). "
+                f"Use replace_file_content to surgically edit specific blocks without replacing the entire file."
+            )
+
+    if target.suffix == ".py":
+        try:
+            ast.parse(content, filename=filepath)
+        except SyntaxError as syn_err:
+            return (
+                f"Rejected write_file: Content introduces SyntaxError at line {syn_err.lineno}: {syn_err.msg}. "
+                f"Fix the syntax error or use replace_file_content for surgical edits."
+            )
+
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Successfully updated {filepath} ({len(content.splitlines())} lines)"
 
 
-def execute_replace_file_content(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
+def execute_replace_file_content(tool_input: dict[str, Any], workspace_root: Path | None = None, security_context: SecurityContext | None = None) -> str:
     root = _get_target_root(tool_input, workspace_root)
     filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
     target_content = tool_input.get("target_content") or tool_input.get("search_block") or ""
@@ -189,6 +269,10 @@ def execute_replace_file_content(tool_input: dict[str, Any], workspace_root: Pat
         return "Error: 'filepath' parameter is required."
     if not target_content:
         return "Error: 'target_content' parameter is required."
+
+    if security_context:
+        security_context.assert_capability(AgentCapability.WORKSPACE_WRITE)
+        security_context.assert_path_within_workspace(os.path.join(root, filepath))
 
     try:
         apply_search_replace(root, filepath, target_content, replacement_content)

@@ -22,6 +22,11 @@ from ..common.token_budget import TokenBudget, usage_from_response
 logger = setup_logging(__name__)
 
 
+class InvalidPlanError(Exception):
+    """Raised when an execution plan has unresolvable dependency cycles or invalid structure."""
+    pass
+
+
 class EvidenceDrivenPlanner:
     """
     Synthesizes repository evidence, baseline status, and the user objective
@@ -338,9 +343,8 @@ Format:
         try:
             TicketDAG(clean_tickets)
         except ValueError as err:
-            logger.warning("Ticket DAG validation warning (%s); stripping circular dependencies.", err)
-            for t in clean_tickets:
-                t.depends_on = []
+            logger.error("Ticket DAG contains invalid or circular dependencies: %s", err)
+            raise InvalidPlanError(f"Plan validation failed due to circular dependencies: {err}") from err
 
         return clean_tickets
 

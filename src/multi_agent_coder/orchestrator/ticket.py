@@ -14,12 +14,17 @@ import uuid
 class TicketStatus(str, Enum):
     PENDING = "PENDING"
     READY = "READY"
+    QUEUED = "QUEUED"
     IN_PROGRESS = "IN_PROGRESS"
-    COMPLETED = "COMPLETED"
-    RESOLVED = "COMPLETED"  # Backward compatibility alias
+    IMPLEMENTED = "IMPLEMENTED"
+    VERIFYING = "VERIFYING"
+    VERIFIED = "VERIFIED"
+    RESOLVED = "RESOLVED"
+    COMPLETED = "RESOLVED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
-    QUEUED = "IN_PROGRESS"  # Backward compatibility alias
+    CANCELLED = "CANCELLED"
+
 
 
 @dataclass
@@ -61,6 +66,7 @@ class Ticket:
         tool: str,
         detail: str | None = None,
         status: str = "success",
+        output: str | None = None,
     ) -> dict:
         """Record a discrete tool action taken during execution."""
         act = {
@@ -69,6 +75,8 @@ class Ticket:
             "detail": detail,
             "status": status,
         }
+        if output:
+            act["output"] = output[:300]
         self.actions.append(act)
         return act
 
@@ -107,7 +115,7 @@ class Ticket:
     def mark_queued(self, agent_id: str) -> None:
         self.assigned_agent_id = agent_id
         if self.status in (TicketStatus.PENDING, TicketStatus.READY):
-            self.status = TicketStatus.IN_PROGRESS
+            self.status = TicketStatus.QUEUED
 
     def mark_in_progress(self) -> None:
         self.status = TicketStatus.IN_PROGRESS

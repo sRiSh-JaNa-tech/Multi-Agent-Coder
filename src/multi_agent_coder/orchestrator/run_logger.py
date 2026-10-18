@@ -59,6 +59,7 @@ class SwarmRunLogger:
         self.run_id = run_id or f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         self.run_dir = self.log_dir / "runs" / self.run_id
         self.events_path = self.run_dir / "events.jsonl"
+        self.run_log_path = self.run_dir / "run.log"
         self.summary_path = self.run_dir / "summary.json"
         self.index_path = self.log_dir / "runs_index.jsonl"
 
@@ -85,26 +86,91 @@ class SwarmRunLogger:
                 self._warned = True
                 logger.warning("Swarm run log unavailable (%s): %s", path, exc)
 
+    def _write_run_log(self, text: str) -> None:
+        try:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            ts = _now_iso()
+            with self._lock, open(self.run_log_path, "a", encoding="utf-8") as fh:
+                fh.write(f"[{ts}] {text}\n")
+        except OSError as exc:
+            if not self._warned:
+                self._warned = True
+                logger.warning("Swarm run.log unavailable (%s): %s", self.run_log_path, exc)
+
+    def _format_event_log(self, event_type: str, fields: dict[str, Any]) -> str:
+        if event_type == "run_started":
+            return (
+                f"[RUN_STARTED] Run ID: {self.run_id} | Objective: {fields.get('objective', '')} | "
+                f"Model: {fields.get('model', '')} | Workspace: {fields.get('workspace_root', '')} | "
+                f"Max Agents: {fields.get('max_agents', '')}"
+            )
+        if event_type == "ticket_created":
+            deps = fields.get("depends_on", [])
+            deps_str = f" (depends on: {', '.join(deps)})" if deps else ""
+            return f"[TICKET_CREATED] [{fields.get('ticket_id')}] '{fields.get('title')}' [{fields.get('category')}]{deps_str}"
+        if event_type == "ticket_assigned":
+            return f"[TICKET_ASSIGNED] [{fields.get('ticket_id')}] -> [{fields.get('agent_id')}] (queue depth: {fields.get('queue_depth')})"
+        if event_type == "ticket_started":
+            return f"[TICKET_STARTED] [{fields.get('agent_id')}] started [{fields.get('ticket_id')}]"
+        if event_type == "tool_call":
+            detail = fields.get("detail")
+            return f"[TOOL_CALL] [{fields.get('agent_id')}] on [{fields.get('ticket_id')}]: {fields.get('tool')}({detail if detail else ''})"
+        if event_type == "action":
+            detail = fields.get("detail")
+            status = fields.get("status", "success")
+            output = fields.get("output")
+            out_str = f" | output: {_clip(output, 200)}" if output else ""
+            return f"[ACTION] [{fields.get('agent_id')}] on [{fields.get('ticket_id')}]: {fields.get('tool')}({detail if detail else ''}) -> {status.upper()}{out_str}"
+        if event_type == "llm_usage":
+            return (
+                f"[LLM_USAGE] [{fields.get('agent_id')}] [{fields.get('ticket_id')}]: "
+                f"prompt={fields.get('prompt_tokens')} completion={fields.get('completion_tokens')} "
+                f"total={fields.get('total_tokens')} (run_total={fields.get('run_total_tokens')})"
+            )
+        if event_type == "ticket_completed":
+            return (
+                f"[TICKET_COMPLETED] [{fields.get('agent_id')}] finished [{fields.get('ticket_id')}] "
+                f"in {fields.get('duration_seconds')}s (tokens: {fields.get('tokens_used')}, tool calls: {fields.get('tool_calls')})"
+            )
+        if event_type == "ticket_failed":
+            return (
+                f"[TICKET_FAILED] [{fields.get('agent_id')}] failed [{fields.get('ticket_id')}] "
+                f"({fields.get('failure_code')}): {fields.get('error')}"
+            )
+        if event_type == "ticket_blocked":
+            return f"[TICKET_BLOCKED] [{fields.get('ticket_id')}] BLOCKED ({fields.get('failure_code')}): {fields.get('error')}"
+        if event_type == "run_finished":
+            return (
+                f"[RUN_FINISHED] Run ID: {self.run_id} | resolved={fields.get('resolved')} "
+                f"failed={fields.get('failed')} blocked={fields.get('blocked')} total={fields.get('total_tickets')} "
+                f"tokens_used={fields.get('tokens_used')}"
+            )
+        return f"[{event_type.upper()}] {json.dumps(fields, ensure_ascii=False)}"
+
+    def log(self, message: str, level: str = "INFO") -> None:
+        """Write an arbitrary log message to run.log."""
+        self._write_run_log(f"[{level.upper()}] {message}")
+
     def event(self, event_type: str, **fields: Any) -> None:
         if not self._started_event_written:
             self._started_event_written = True
-            self._write_line(
-                self.events_path,
-                {
-                    "ts": self.started_at,
-                    "run_id": self.run_id,
-                    "event": "run_started",
-                    "objective": _clip(self.objective),
-                    "workspace_root": self.workspace_root,
-                    "model": self.model,
-                    "token_limit": "unlimited" if self.token_limit is None else self.token_limit,
-                    "max_agents": self.max_agents,
-                    "queue_limit_per_agent": self.queue_limit,
-                },
-            )
+            init_fields = {
+                "ts": self.started_at,
+                "run_id": self.run_id,
+                "event": "run_started",
+                "objective": _clip(self.objective),
+                "workspace_root": self.workspace_root,
+                "model": self.model,
+                "token_limit": "unlimited" if self.token_limit is None else self.token_limit,
+                "max_agents": self.max_agents,
+                "queue_limit_per_agent": self.queue_limit,
+            }
+            self._write_line(self.events_path, init_fields)
+            self._write_run_log(self._format_event_log("run_started", init_fields))
         record = {"ts": _now_iso(), "run_id": self.run_id, "event": event_type}
         record.update({k: _clip(v) for k, v in fields.items()})
         self._write_line(self.events_path, record)
+        self._write_run_log(self._format_event_log(event_type, fields))
 
     # ------------------------------------------------------- ticket lifecycle
     def ticket_created(self, ticket: Any) -> None:
@@ -182,8 +248,25 @@ class SwarmRunLogger:
     def tool_call(self, agent_id: str, ticket_id: str, name: str, detail: str | None) -> None:
         self.event("tool_call", agent_id=agent_id, ticket_id=ticket_id, tool=name, detail=detail)
 
-    def action_completed(self, agent_id: str, ticket_id: str, name: str, detail: str | None, status: str = "success") -> None:
-        self.event("action", agent_id=agent_id, ticket_id=ticket_id, tool=name, detail=detail, status=status)
+    def action_completed(
+        self,
+        agent_id: str,
+        ticket_id: str,
+        name: str,
+        detail: str | None,
+        status: str = "success",
+        output: str | None = None,
+    ) -> None:
+        kwargs: dict[str, Any] = {
+            "agent_id": agent_id,
+            "ticket_id": ticket_id,
+            "tool": name,
+            "detail": detail,
+            "status": status,
+        }
+        if output:
+            kwargs["output"] = output
+        self.event("action", **kwargs)
 
     # --------------------------------------------------------------- finalize
     def finalize(self, summary: dict[str, Any]) -> None:
@@ -256,9 +339,20 @@ def read_run_log(log_dir: Path | str, run_id: str | None = None, tail: int = 200
         except json.JSONDecodeError:
             summary = None
 
+    run_log_file = run_dir / "run.log"
+    run_log_text = ""
+    if run_log_file.exists():
+        try:
+            lines = run_log_file.read_text(encoding="utf-8").splitlines()
+            run_log_text = "\n".join(lines[-max(1, tail):])
+        except Exception:
+            run_log_text = ""
+
     return {
         "run_id": run_dir.name,
         "run_dir": str(run_dir),
+        "run_log_path": str(run_log_file),
+        "run_log": run_log_text,
         "finished": summary is not None,
         "summary": summary,
         "event_count": len(events),

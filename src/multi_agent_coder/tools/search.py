@@ -69,21 +69,53 @@ from .repo import find_repo_path, normalize_collection_name
 
 
 def execute_search_code(
-    vector_store: VectorStore, embedder: Embedder, tool_input: dict[str, Any]
+    vector_store: VectorStore | None,
+    embedder: Embedder | None,
+    tool_input: dict[str, Any],
+    workspace_root: Path | str | None = None,
 ) -> str:
-    """Semantic search across indexed codebases."""
-    query = tool_input["query"]
+    """Semantic search across indexed codebases with resilient fallback to grep."""
+    query = tool_input.get("query", "")
     repo = tool_input.get("repo")
-    collection_name = normalize_collection_name(repo) if repo else None
+    if not query:
+        return "Error: 'query' parameter is required for search_code."
 
-    query_embedding = embedder.embed_query(query)
-    results = vector_store.search(
-        query_embedding=query_embedding,
-        collection_name=collection_name,
-        n_results=5,
-    )
+    if vector_store is None or embedder is None:
+        logger.info("Semantic vector store / embedder unavailable; falling back to grep for query: '%s'", query)
+        return execute_grep(
+            vector_store=vector_store,
+            _embedder=embedder,
+            tool_input={"pattern": re.escape(query), "repo": repo},
+            workspace_root=workspace_root,
+        )
+
+    try:
+        collection_name = normalize_collection_name(repo) if repo else None
+        query_embedding = embedder.embed_query(query)
+        results = vector_store.search(
+            query_embedding=query_embedding,
+            collection_name=collection_name,
+            n_results=5,
+        )
+    except Exception as exc:
+        logger.warning("Semantic search failed (%s); falling back to grep.", exc)
+        return execute_grep(
+            vector_store=vector_store,
+            _embedder=embedder,
+            tool_input={"pattern": re.escape(query), "repo": repo},
+            workspace_root=workspace_root,
+        )
 
     if not results:
+        # If vector search returned 0 results, also try grep before giving up
+        grep_fallback = execute_grep(
+            vector_store=vector_store,
+            _embedder=embedder,
+            tool_input={"pattern": re.escape(query), "repo": repo},
+            workspace_root=workspace_root,
+        )
+        if "No matches" not in grep_fallback and "No repositories" not in grep_fallback:
+            return f"No semantic embedding matches. Grep matches:\n\n{grep_fallback}"
         return f"No results found for: {query}"
 
     parts = [f"Search results for: '{query}'\n"]

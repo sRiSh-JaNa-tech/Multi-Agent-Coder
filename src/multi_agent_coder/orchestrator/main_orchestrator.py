@@ -634,7 +634,7 @@ class MainOrchestrator:
         self.run_logger.ticket_blocked(ticket, reason, code)
 
     def _propagate_blocked(self) -> None:
-        """Block backlog tickets whose dependency failed, was blocked, or does not exist."""
+        """Block backlog tickets whose dependency permanently failed, was blocked, or does not exist."""
         changed = True
         while changed:
             changed = False
@@ -650,6 +650,53 @@ class MainOrchestrator:
                         continue
                     changed = True
                     break
+
+    def _handle_ticket_completion(self, completed: Ticket, resolved_tickets: list[Ticket]) -> bool:
+        """
+        Handle post-ticket completion lifecycle:
+        - If resolved, record to resolved_tickets and trigger QA if auto_qa is True.
+        - If failed and retries remain, re-queue with diagnostic guidance instead of cascading blocks.
+        - If failed and retries exhausted, record to resolved_tickets as failed.
+        Returns True if ticket concluded its lifecycle (resolved or exhausted).
+        """
+        if completed.status == TicketStatus.RESOLVED:
+            resolved_tickets.append(completed)
+            if self.auto_qa:
+                self._create_qa_verification_ticket(completed)
+            return True
+
+        if completed.status == TicketStatus.FAILED:
+            can_retry = (
+                completed.retries < completed.max_retries
+                and completed.failure_code not in ("TOKEN_BUDGET_EXHAUSTED", "CANCELLED")
+                and not self.token_budget.exhausted
+            )
+            if can_retry:
+                completed.retries += 1
+                logger.warning(
+                    "Ticket [%s] failed on attempt %d/%d (%s: %s). Re-queueing with diagnostic repair context.",
+                    completed.id, completed.retries, completed.max_retries, completed.failure_code, completed.error
+                )
+                diagnostic = (
+                    f"\n\n[PREVIOUS ATTEMPT {completed.retries} FAILED]\n"
+                    f"Failure Code: {completed.failure_code}\n"
+                    f"Error Details: {completed.error or 'Failed without output'}\n"
+                    f"Remediation Guidance: Diagnose the error above. Make focused, surgical changes with "
+                    f"replace_file_content, verify syntax with check_syntax, and submit a complete [Agent Status: RESOLVED] report."
+                )
+                completed.description += diagnostic
+                completed.status = TicketStatus.READY
+                completed.assigned_agent_id = None
+                completed.error = None
+                completed.failure_code = None
+                if completed not in self.pending_backlog:
+                    self.pending_backlog.append(completed)
+                return False
+            else:
+                resolved_tickets.append(completed)
+                return True
+
+        return False
 
     def _abort_for_budget(self) -> None:
         reason = "Token budget exhausted before this ticket could run"
@@ -686,10 +733,8 @@ class MainOrchestrator:
                     # Agent processes its next ticket strictly synchronously
                     completed = agent.process_next_ticket(callback=on_step_callback)
                     if completed:
-                        resolved_tickets.append(completed)
+                        self._handle_ticket_completion(completed, resolved_tickets)
                         work_done_in_round = True
-                        if self.auto_qa and completed.status == TicketStatus.RESOLVED:
-                            self._create_qa_verification_ticket(completed)
 
                     # Fill freed slots / unlock dependents / block failed chains
                     self.dispatch_all_pending()
@@ -777,9 +822,7 @@ class MainOrchestrator:
 
                     if completed:
                         with self._lock:
-                            resolved_tickets.append(completed)
-                            if self.auto_qa and completed.status == TicketStatus.RESOLVED:
-                                self._create_qa_verification_ticket(completed)
+                            self._handle_ticket_completion(completed, resolved_tickets)
 
                 # 5. Dispatch newly unlocked backlog tickets
                 with self._lock:
@@ -808,6 +851,10 @@ class MainOrchestrator:
         Load an explicit DAG of tickets from a manifest (e.g. prepared by Antigravity or JSON file).
         Validates dependencies using Kahn's algorithm before queueing.
         """
+        if isinstance(manifest_data, dict):
+            obj = manifest_data.get("objective")
+            if obj:
+                self._note_objective(str(obj))
         raw_tickets = manifest_data.get("tickets", []) if isinstance(manifest_data, dict) else manifest_data
         loaded: list[Ticket] = []
 

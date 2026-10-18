@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from ..common.logging_config import setup_logging
+from ..security.permissions import AgentCapability, SecurityContext # Import security modules
+
+import os # Import os for path manipulation
+import re # Import re for regex matching in security context
 
 logger = setup_logging(__name__)
 
@@ -100,7 +104,13 @@ def _resolve_target(
         from .coding import resolve_safe_path
 
         try:
-            return resolve_safe_path(Path(workspace_root), relative or "."), None, "workspace"
+            # Use os.path.commonpath for strict path containment
+            abs_filepath = os.path.abspath(Path(workspace_root) / (relative or "."))
+            abs_workspace_root = os.path.abspath(workspace_root)
+            common = os.path.commonpath([abs_workspace_root, abs_filepath])
+            if common != abs_workspace_root:
+                raise PermissionError(f"Path traversal blocked: '{relative}' escapes workspace root.")
+            return Path(workspace_root) / (relative or "."), None, "workspace"
         except PermissionError as exc:
             return None, f"Error: {exc}", "workspace"
 
