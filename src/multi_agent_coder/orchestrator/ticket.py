@@ -51,6 +51,9 @@ class Ticket:
     priority: int = 2                  # 1 (highest) to 5
     expected_deliverables: list[str] = field(default_factory=list)
     follow_up_findings: list[dict] = field(default_factory=list)
+    actual_files_modified: list[str] = field(default_factory=list)
+    verified: bool = False
+    verification_summary: str = ""
 
     @classmethod
     def create(
@@ -144,6 +147,8 @@ class Ticket:
             "tool_calls": self.tool_calls,
             "duration_seconds": self.duration_seconds,
             "follow_up_findings": self.follow_up_findings,
+            "actual_files_modified": self.actual_files_modified,
+            "verified": self.verified,
         }
 
 

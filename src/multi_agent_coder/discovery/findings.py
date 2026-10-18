@@ -100,6 +100,7 @@ class Finding:
         else:
             finding_id = custom_id
 
+        normalized_fp = file_path.replace("\\", "/").lstrip("./") if file_path else None
         return cls(
             id=finding_id,
             title=title.strip(),
@@ -107,7 +108,7 @@ class Finding:
             category=category,
             confidence=confidence,
             severity=severity,
-            file_path=file_path.replace("\\", "/") if file_path else None,
+            file_path=normalized_fp,
             line_number=line_number,
             evidence=evidence.strip(),
             impact=impact.strip(),
@@ -138,7 +139,7 @@ class Finding:
     def fingerprint(self) -> str:
         """Normalized fingerprint for deduplication."""
         norm_title = re.sub(r"\W+", "_", self.title.lower()).strip("_")[:40]
-        fp = self.file_path or "any"
+        fp = (self.file_path or "any").replace("\\", "/").lstrip("./").lower()
         line = self.line_number or 0
         return f"{self.category.value}:{fp}:{line}:{norm_title}"
 

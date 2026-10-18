@@ -287,6 +287,8 @@ def execute_check_syntax(tool_input: dict[str, Any], workspace_root: Path | None
         cmd = [sys.executable, "-m", "py_compile", str(target)]
     elif ext in (".json",):
         cmd = [sys.executable, "-m", "json.tool", str(target)]
+    elif ext in (".yaml", ".yml"):
+        cmd = [sys.executable, "-c", "import yaml, sys; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))", str(target)]
     else:
         return f"Syntax valid (skipped non-script file): {filepath}"
 

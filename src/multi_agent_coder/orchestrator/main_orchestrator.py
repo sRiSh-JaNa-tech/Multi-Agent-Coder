@@ -51,6 +51,8 @@ class AutonomousRunState(str, Enum):
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
     NO_PROGRESS = "NO_PROGRESS"
     CANCELLED = "CANCELLED"
+    PLANNED = "PLANNED"
+    AUDIT_COMPLETE = "AUDIT_COMPLETE"
 
 
 class MainOrchestrator:
@@ -292,8 +294,11 @@ class MainOrchestrator:
                 f for f in self.findings_registry.list_all()
                 if f.confidence == FindingConfidence.CONFIRMED or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH)
             ]
-            self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value if not confirmed_defects else AutonomousRunState.INCOMPLETE.value
+            self.final_status = AutonomousRunState.AUDIT_COMPLETE.value
             summary = self.get_summary()
+            summary["audit_complete"] = True
+            summary["clean"] = (len(confirmed_defects) == 0)
+            summary["confirmed_defects"] = [f.to_dict() for f in confirmed_defects]
             self.run_logger.finalize(summary)
             return summary
 
@@ -302,8 +307,9 @@ class MainOrchestrator:
             self.identify_problems_and_create_tickets(objective)
 
         if mode == "plan":
-            self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+            self.final_status = AutonomousRunState.PLANNED.value
             summary = self.get_summary()
+            summary["planned"] = True
             self.run_logger.finalize(summary)
             return summary
 
@@ -336,13 +342,16 @@ class MainOrchestrator:
             # Independent verification of resolved tickets
             failed_verification_count = 0
             for ticket in self.all_tickets:
-                if ticket.status == TicketStatus.RESOLVED:
+                if ticket.status == TicketStatus.RESOLVED and not ticket.verified:
                     v_res = verifier.verify_ticket(ticket)
                     if not v_res.success:
                         ticket.status = TicketStatus.FAILED
+                        ticket.verified = False
                         ticket.error = f"Independent verification failed: {v_res.summary}"
                         ticket.failure_code = "VERIFICATION_FAILED"
                         failed_verification_count += 1
+                    else:
+                        ticket.verified = True
 
             # Extract discoveries from workers
             newly_discovered_count = 0
@@ -365,8 +374,9 @@ class MainOrchestrator:
             agg_res = verifier.verify_aggregate()
 
             # Check if all completed cleanly
-            all_resolved = all(t.status == TicketStatus.RESOLVED for t in self.all_tickets)
-            if all_resolved and failed_verification_count == 0 and newly_discovered_count == 0 and agg_res.success:
+            all_resolved = len(self.all_tickets) > 0 and all(t.status == TicketStatus.RESOLVED for t in self.all_tickets)
+            all_verified = len(self.all_tickets) > 0 and all(t.verified for t in self.all_tickets)
+            if all_resolved and all_verified and failed_verification_count == 0 and newly_discovered_count == 0 and agg_res.success:
                 self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
                 logger.info("Autonomous Loop reached VERIFIED_COMPLETE.")
                 break
@@ -385,7 +395,7 @@ class MainOrchestrator:
                     if f.id not in resolved_fids and (f.confidence == FindingConfidence.CONFIRMED or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH))
                 ]
                 if not unresolved and not agg_res.regressions:
-                    if all_resolved:
+                    if all_resolved and all_verified and agg_res.success:
                         self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
                     else:
                         self.final_status = AutonomousRunState.INCOMPLETE.value
@@ -424,12 +434,16 @@ class MainOrchestrator:
         if self.final_status == AutonomousRunState.INCOMPLETE.value:
             if self.token_budget.exhausted:
                 self.final_status = AutonomousRunState.BUDGET_EXHAUSTED.value
-            elif all(t.status == TicketStatus.BLOCKED for t in self.all_tickets) and self.all_tickets:
+            elif any(t.status == TicketStatus.BLOCKED for t in self.all_tickets) and not any(t.status in (TicketStatus.IN_PROGRESS, TicketStatus.RESOLVED) for t in self.all_tickets):
                 self.final_status = AutonomousRunState.BLOCKED.value
             elif any(t.status == TicketStatus.FAILED for t in self.all_tickets):
                 self.final_status = AutonomousRunState.FAILED.value
-            elif agg_res.success and all(t.status == TicketStatus.RESOLVED for t in self.all_tickets):
+            elif agg_res.success and self.all_tickets and all(t.status == TicketStatus.RESOLVED and t.verified for t in self.all_tickets):
                 self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+            elif not any(t.status in (TicketStatus.IN_PROGRESS, TicketStatus.RESOLVED) for t in self.all_tickets):
+                self.final_status = AutonomousRunState.NO_PROGRESS.value
+            else:
+                self.final_status = AutonomousRunState.INCOMPLETE.value
 
         summary = self.get_summary()
         self.run_logger.finalize(summary)

@@ -48,6 +48,20 @@ class EvidenceDrivenPlanner:
             self._client = genai.Client(api_key=self.api_key) if self.api_key else genai.Client()
         return self._client
 
+    def _is_finding_relevant_to_objective(self, finding: Finding, objective: str) -> bool:
+        """Check if finding is directly mentioned or relevant to the objective text."""
+        if not objective:
+            return False
+        obj_lower = objective.lower()
+        if finding.file_path:
+            fp_parts = Path(finding.file_path).parts
+            if any(part.lower() in obj_lower for part in fp_parts if len(part) > 2):
+                return True
+        words = [w.lower() for w in re.findall(r"\w+", finding.title) if len(w) > 3]
+        if any(w in obj_lower for w in words):
+            return True
+        return False
+
     def plan(
         self,
         objective: str,
@@ -63,8 +77,14 @@ class EvidenceDrivenPlanner:
                     objective[:60], len(findings))
 
         prioritized = findings.prioritized()
-        # Filter findings relevant to objective if possible, but keep confirmed defects
-        relevant_findings = [f for f in prioritized if f.confidence == FindingConfidence.CONFIRMED or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH)]
+        # Filter findings relevant to objective, confirmed defects, defects/security issues, and critical/high issues
+        relevant_findings = [
+            f for f in prioritized
+            if f.confidence == FindingConfidence.CONFIRMED
+            or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH)
+            or f.category in (FindingCategory.DEFECT, FindingCategory.SECURITY)
+            or self._is_finding_relevant_to_objective(f, objective)
+        ]
         if not relevant_findings:
             relevant_findings = prioritized[:6]
         else:
@@ -330,21 +350,66 @@ Format:
         unresolved_findings: list[Finding],
         baseline: RepositoryBaseline,
         existing_tickets: list[Ticket],
+        max_retries: int = 2,
     ) -> list[Ticket]:
         """Generate follow-up tickets for newly discovered findings or failed verification steps."""
         if not unresolved_findings:
             return []
 
-        logger.info("Planner generating follow-up tickets for %d unresolved findings.", len(unresolved_findings))
+        actionable_findings = [
+            f for f in unresolved_findings
+            if f.confidence == FindingConfidence.CONFIRMED
+            or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH)
+            or f.category in (FindingCategory.DEFECT, FindingCategory.SECURITY)
+            or self._is_finding_relevant_to_objective(f, objective)
+        ]
+        if not actionable_findings:
+            return []
+
+        logger.info("Planner evaluating %d actionable findings for follow-up against %d existing tickets.",
+                    len(actionable_findings), len(existing_tickets))
         follow_ups: list[Ticket] = []
-        for finding in unresolved_findings:
+
+        for finding in actionable_findings:
+            # 1. Skip if already active in an uncompleted ticket
+            is_active = any(
+                finding.id in t.finding_ids and t.status in (TicketStatus.PENDING, TicketStatus.IN_PROGRESS, TicketStatus.QUEUED)
+                for t in existing_tickets
+            )
+            if is_active:
+                logger.debug("Finding %s is already active in a pending ticket; skipping.", finding.id)
+                continue
+
+            # 2. Skip if already resolved and verified
+            is_resolved = any(
+                finding.id in t.finding_ids and t.status == TicketStatus.RESOLVED and t.verified
+                for t in existing_tickets
+            )
+            if is_resolved:
+                logger.debug("Finding %s was already resolved and verified; skipping.", finding.id)
+                continue
+
+            # 3. Check bounded retry limit
+            failed_attempts = sum(
+                1 for t in existing_tickets
+                if finding.id in t.finding_ids and t.status == TicketStatus.FAILED
+            )
+            if failed_attempts >= max_retries:
+                logger.warning(
+                    "Finding %s reached retry limit (%d/%d attempts); no duplicate tickets will be generated.",
+                    finding.id, failed_attempts, max_retries
+                )
+                continue
+
+            retry_suffix = f" (Retry {failed_attempts + 1})" if failed_attempts > 0 else ""
             v_cmds = [baseline.detected_test_command] if baseline.detected_test_command else []
             t = Ticket.create(
-                title=f"Follow-up: {finding.title[:45]}",
+                title=f"Follow-up{retry_suffix}: {finding.title[:45]}",
                 description=(
                     f"Follow-up remediation for discovered finding {finding.id}.\n"
                     f"Evidence: {finding.evidence}\n"
-                    f"Suggested action: {finding.suggested_remediation}"
+                    f"Suggested action: {finding.suggested_remediation}\n"
+                    + (f"Note: Prior attempt {failed_attempts} failed verification. Refine implementation.\n" if failed_attempts > 0 else "")
                 ),
                 category="coding",
                 finding_ids=[finding.id],

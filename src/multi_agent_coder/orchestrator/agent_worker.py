@@ -310,7 +310,16 @@ class AgentWorker:
         if not handler:
             return f"Unknown tool: {name}"
         try:
-            return str(handler(args))
+            res = str(handler(args))
+            if name in MUTATING_TOOLS and self.current_ticket:
+                res_str = str(res)
+                if not res_str.lower().startswith("error"):
+                    file_arg = args.get("filepath") or args.get("path") or args.get("file")
+                    if file_arg:
+                        norm = Path(file_arg).as_posix().lstrip("./")
+                        if norm not in self.current_ticket.actual_files_modified:
+                            self.current_ticket.actual_files_modified.append(norm)
+            return res
         except Exception as exc:
             return f"Error executing {name}: {exc}"
 

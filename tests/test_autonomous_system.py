@@ -335,10 +335,11 @@ class TestAutonomousSystem(unittest.TestCase):
         self.assertTrue(v_res.success)
 
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Scenario K: No Actionable Findings (Clean Audit)
     # -------------------------------------------------------------------------
     def test_scenario_k_clean_audit(self):
-        """Clean repository audit completes with VERIFIED_COMPLETE and 0 defects."""
+        """Clean repository audit completes with AUDIT_COMPLETE and 0 defects."""
         clean_file = self.workspace / "main.py"
         clean_file.write_text("def main():\n    return 0\n", encoding="utf-8")
         subprocess.run(["git", "add", "main.py"], cwd=str(self.workspace), capture_output=True)
@@ -347,7 +348,8 @@ class TestAutonomousSystem(unittest.TestCase):
         orchestrator = MainOrchestrator(workspace_root=self.workspace, api_key="dummy")
         summary = orchestrator.run_autonomous_loop("Audit codebase for defects", mode="audit")
 
-        self.assertEqual(summary["status"], AutonomousRunState.VERIFIED_COMPLETE.value)
+        self.assertEqual(summary["status"], AutonomousRunState.AUDIT_COMPLETE.value)
+        self.assertTrue(summary.get("clean"))
         self.assertEqual(summary["total_tickets"], 0)
 
     # -------------------------------------------------------------------------
@@ -398,6 +400,176 @@ class TestAutonomousSystem(unittest.TestCase):
         t.mark_resolved("Bug resolved in math_service.py")
         v_res = verifier.verify_ticket(t)
         self.assertTrue(v_res.success)
+
+    # -------------------------------------------------------------------------
+    # Regression Tests for Autonomy Loop Audit & Fixes
+    # -------------------------------------------------------------------------
+    def test_plan_mode_status_planned(self):
+        """Plan mode generates tickets and finishes with status PLANNED, never VERIFIED_COMPLETE."""
+        clean_file = self.workspace / "main.py"
+        clean_file.write_text("def main():\n    return 0\n", encoding="utf-8")
+        subprocess.run(["git", "add", "main.py"], cwd=str(self.workspace), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Clean base"], cwd=str(self.workspace), capture_output=True)
+
+        orchestrator = MainOrchestrator(workspace_root=self.workspace, api_key="dummy")
+        summary = orchestrator.run_autonomous_loop("Add documentation and refactor main", mode="plan")
+
+        self.assertEqual(summary["status"], AutonomousRunState.PLANNED.value)
+        self.assertTrue(summary.get("planned"))
+        self.assertNotEqual(summary["status"], AutonomousRunState.VERIFIED_COMPLETE.value)
+        self.assertGreaterEqual(summary["total_tickets"], 1)
+
+    def test_multi_ticket_attribution_no_false_scope_violation(self):
+        """Changes from unrelated tickets do not trigger false scope violations."""
+        file_a = self.workspace / "service_a.py"
+        file_a.write_text("def service_a(): return 1\n", encoding="utf-8")
+        file_b = self.workspace / "service_b.py"
+        file_b.write_text("def service_b(): return 2\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(self.workspace), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Base"], cwd=str(self.workspace), capture_output=True)
+
+        # Ticket 1 modified service_a.py
+        file_a.write_text("def service_a(): return 10\n", encoding="utf-8")
+        ticket1 = Ticket.create(title="Update A", description="A", category="coding", target_files=["service_a.py"])
+        ticket1.actual_files_modified = ["service_a.py"]
+        ticket1.mark_resolved("Done A")
+
+        # Ticket 2 modified service_b.py
+        file_b.write_text("def service_b(): return 20\n", encoding="utf-8")
+        ticket2 = Ticket.create(title="Update B", description="B", category="coding", target_files=["service_b.py"])
+        ticket2.actual_files_modified = ["service_b.py"]
+        ticket2.mark_resolved("Done B")
+
+        verifier = IndependentVerifier(workspace_root=self.workspace)
+        v_res2 = verifier.verify_ticket(ticket2)
+
+        # Ticket 2 should ONLY be evaluated against service_b.py, NOT service_a.py
+        self.assertNotIn("service_a.py", v_res2.scope_violations)
+        self.assertEqual(len(v_res2.scope_violations), 0)
+        self.assertTrue(v_res2.success)
+
+    def test_git_status_short_parsing_in_verifier(self):
+        """_get_current_modified_files correctly parses short format git status."""
+        tracked_file = self.workspace / "tracked.py"
+        tracked_file.write_text("original = True\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.py"], cwd=str(self.workspace), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Tracked"], cwd=str(self.workspace), capture_output=True)
+
+        # Modify tracked file
+        tracked_file.write_text("original = False\n", encoding="utf-8")
+        # Create untracked file
+        untracked = self.workspace / "untracked.py"
+        untracked.write_text("untracked = True\n", encoding="utf-8")
+
+        verifier = IndependentVerifier(workspace_root=self.workspace)
+        mod_files = verifier._get_current_modified_files()
+
+        self.assertIn("tracked.py", mod_files)
+        self.assertIn("untracked.py", mod_files)
+
+    def test_non_python_syntax_check(self):
+        """Verifier validates syntax for non-Python files including JSON and YAML."""
+        bad_json = self.workspace / "config.json"
+        bad_json.write_text('{"bad_json": [1, 2, }', encoding="utf-8")
+        bad_yaml = self.workspace / "config.yaml"
+        bad_yaml.write_text('key: "unclosed string\n  other: 1', encoding="utf-8")
+
+        ticket_json = Ticket.create(title="Update JSON", description="JSON", category="coding", target_files=["config.json"])
+        ticket_json.actual_files_modified = ["config.json"]
+        verifier = IndependentVerifier(workspace_root=self.workspace)
+        v_json = verifier.verify_ticket(ticket_json)
+        self.assertFalse(v_json.success)
+        self.assertGreaterEqual(len(v_json.syntax_errors), 1)
+
+        ticket_yaml = Ticket.create(title="Update YAML", description="YAML", category="coding", target_files=["config.yaml"])
+        ticket_yaml.actual_files_modified = ["config.yaml"]
+        v_yaml = verifier.verify_ticket(ticket_yaml)
+        self.assertFalse(v_yaml.success)
+        self.assertGreaterEqual(len(v_yaml.syntax_errors), 1)
+
+    def test_command_failure_and_timeout_detection(self):
+        """Commands with nonzero exit code or timeouts cannot be reported as passing."""
+        ticket = Ticket.create(
+            title="Run tests",
+            description="Run",
+            category="testing",
+            verification_commands=["python -c \"import sys; sys.exit(1)\""],
+        )
+        verifier = IndependentVerifier(workspace_root=self.workspace)
+        v_res = verifier.verify_ticket(ticket)
+        self.assertFalse(v_res.success)
+        self.assertEqual(len(v_res.commands_run), 1)
+        self.assertEqual(v_res.commands_run[0]["exit_code"], 1)
+
+    def test_bounded_retry_policy_for_follow_ups(self):
+        """Repeated rounds do not create duplicate follow-up tickets beyond max retry limit."""
+        finding = Finding.create(
+            title="Stubborn Defect",
+            description="Difficult issue",
+            category=FindingCategory.DEFECT,
+            severity=FindingSeverity.HIGH,
+            confidence=FindingConfidence.CONFIRMED,
+            file_path="service.py",
+        )
+        planner = EvidenceDrivenPlanner(workspace_root=self.workspace, api_key="dummy")
+        baseline = capture_repository_baseline(self.workspace, run_tests=False)
+
+        # Attempt 1: First follow-up ticket created
+        tickets_round_1 = planner.plan_follow_up(
+            objective="Fix stubborn defect",
+            unresolved_findings=[finding],
+            baseline=baseline,
+            existing_tickets=[],
+            max_retries=2,
+        )
+        self.assertEqual(len(tickets_round_1), 1)
+        t1 = tickets_round_1[0]
+        t1.status = TicketStatus.FAILED
+
+        # Attempt 2: Second follow-up ticket (Retry 2)
+        tickets_round_2 = planner.plan_follow_up(
+            objective="Fix stubborn defect",
+            unresolved_findings=[finding],
+            baseline=baseline,
+            existing_tickets=[t1],
+            max_retries=2,
+        )
+        self.assertEqual(len(tickets_round_2), 1)
+        t2 = tickets_round_2[0]
+        self.assertIn("Retry 2", t2.title)
+        t2.status = TicketStatus.FAILED
+
+        # Attempt 3: Retry limit reached (max_retries=2), no duplicate ticket created
+        tickets_round_3 = planner.plan_follow_up(
+            objective="Fix stubborn defect",
+            unresolved_findings=[finding],
+            baseline=baseline,
+            existing_tickets=[t1, t2],
+            max_retries=2,
+        )
+        self.assertEqual(len(tickets_round_3), 0)
+
+    def test_finding_fingerprint_path_normalization(self):
+        """Finding fingerprint normalizes relative paths for deduplication."""
+        f1 = Finding.create(
+            title="Fix DB leak",
+            description="leak",
+            category=FindingCategory.DEFECT,
+            file_path="./db/client.py",
+        )
+        f2 = Finding.create(
+            title="Fix DB leak",
+            description="leak",
+            category=FindingCategory.DEFECT,
+            file_path="db\\client.py",
+        )
+        self.assertEqual(f1.fingerprint, f2.fingerprint)
+        registry = FindingRegistry()
+        added1 = registry.add(f1)
+        added2 = registry.add(f2)
+        self.assertTrue(added1)
+        self.assertFalse(added2)
+        self.assertEqual(len(registry), 1)
 
 
 if __name__ == "__main__":
