@@ -314,7 +314,7 @@ class AgentWorker:
             if name in MUTATING_TOOLS and self.current_ticket:
                 res_str = str(res)
                 if not res_str.lower().startswith("error"):
-                    file_arg = args.get("filepath") or args.get("path") or args.get("file")
+                    file_arg = args.get("filepath") or args.get("file_path") or args.get("path") or args.get("file") or args.get("target_file")
                     if file_arg:
                         norm = Path(file_arg).as_posix().lstrip("./")
                         if norm not in self.current_ticket.actual_files_modified:
@@ -387,6 +387,7 @@ class AgentWorker:
         ``code``) or ``TokenBudgetExceeded`` when the ticket cannot be completed, so the
         ticket is recorded as FAILED instead of being reported as resolved.
         """
+        self.current_ticket = ticket
         prompt = build_ticket_execution_prompt(
             ticket=ticket,
             workspace_root=self.workspace_root,
@@ -431,7 +432,7 @@ class AgentWorker:
                 # Flash-lite sometimes prints a tool call as text instead of calling it.
                 if _PSEUDO_CALL_RE.search(text) and "[Agent Status: RESOLVED]" not in text:
                     pseudo_call_strikes += 1
-                    if pseudo_call_strikes > 2:
+                    if pseudo_call_strikes > 4:
                         raise AgentFailure(
                             "PSEUDO_TOOL_CALL",
                             "Agent kept writing tool calls as text instead of invoking tools.",
