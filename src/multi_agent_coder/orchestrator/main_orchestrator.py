@@ -900,6 +900,8 @@ class MainOrchestrator:
                     "duration_seconds": t.duration_seconds,
                     "tokens_used": t.tokens_used,
                     "tool_calls": t.tool_calls,
+                    "actions": t.actions,
+                    "actual_files_modified": t.actual_files_modified,
                     "failure_code": t.failure_code,
                     "result": t.result,
                     "error": t.error,

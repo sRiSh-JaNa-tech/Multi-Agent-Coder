@@ -43,6 +43,7 @@ class Ticket:
     failure_code: str | None = None    # e.g. ITERATION_LIMIT, TOKEN_BUDGET_EXHAUSTED, LLM_ERROR
     tokens_used: int = 0
     tool_calls: int = 0
+    actions: list[dict] = field(default_factory=list)
     finding_ids: list[str] = field(default_factory=list)
     target_files: list[str] = field(default_factory=list)
     acceptance_criteria: list[str] = field(default_factory=list)
@@ -54,6 +55,22 @@ class Ticket:
     actual_files_modified: list[str] = field(default_factory=list)
     verified: bool = False
     verification_summary: str = ""
+
+    def record_action(
+        self,
+        tool: str,
+        detail: str | None = None,
+        status: str = "success",
+    ) -> dict:
+        """Record a discrete tool action taken during execution."""
+        act = {
+            "timestamp": time.time(),
+            "tool": tool,
+            "detail": detail,
+            "status": status,
+        }
+        self.actions.append(act)
+        return act
 
     @classmethod
     def create(
@@ -145,6 +162,7 @@ class Ticket:
             "failure_code": self.failure_code,
             "tokens_used": self.tokens_used,
             "tool_calls": self.tool_calls,
+            "actions": self.actions,
             "duration_seconds": self.duration_seconds,
             "follow_up_findings": self.follow_up_findings,
             "actual_files_modified": self.actual_files_modified,

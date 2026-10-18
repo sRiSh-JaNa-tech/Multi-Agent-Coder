@@ -182,6 +182,9 @@ class SwarmRunLogger:
     def tool_call(self, agent_id: str, ticket_id: str, name: str, detail: str | None) -> None:
         self.event("tool_call", agent_id=agent_id, ticket_id=ticket_id, tool=name, detail=detail)
 
+    def action_completed(self, agent_id: str, ticket_id: str, name: str, detail: str | None, status: str = "success") -> None:
+        self.event("action", agent_id=agent_id, ticket_id=ticket_id, tool=name, detail=detail, status=status)
+
     # --------------------------------------------------------------- finalize
     def finalize(self, summary: dict[str, Any]) -> None:
         """Write summary.json and append this run to the cross-run index."""

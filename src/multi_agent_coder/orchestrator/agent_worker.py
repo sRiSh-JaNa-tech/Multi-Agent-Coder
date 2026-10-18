@@ -93,12 +93,30 @@ def _is_transient(exc: Exception) -> bool:
     )
 
 
-def _describe_call(name: str, args: dict[str, Any]) -> str | None:
-    """Short, content-free description of a tool call for logs (never file bodies)."""
-    for key in ("filepath", "file_path", "path", "command"):
+def _describe_call(name: str, args: Any) -> str | None:
+    """Short, content-free description of a tool call / action for logs (never entire file bodies)."""
+    if isinstance(args, str):
+        return args[:200]
+    if not isinstance(args, dict):
+        return None
+    for key in (
+        "filepath", "file_path", "target_file", "path", "file", "filename",
+        "command", "cmd", "pattern", "query", "dir_path", "directory", "branch_name"
+    ):
         value = args.get(key)
         if value:
             return str(value)[:200]
+    inner = args.get("tool_input")
+    if isinstance(inner, dict):
+        for key in (
+            "filepath", "file_path", "target_file", "path", "file", "filename",
+            "command", "cmd", "pattern", "query", "dir_path", "directory", "branch_name"
+        ):
+            val = inner.get(key)
+            if val:
+                return str(val)[:200]
+    elif isinstance(inner, str):
+        return inner[:200]
     return None
 
 
@@ -466,13 +484,19 @@ class AgentWorker:
                         raise AgentFailure("LOOP_DETECTED", str(exc)) from exc
 
                 res = self._execute_tool(fc.name, call_args)
-                if fc.name in MUTATING_TOOLS and str(res).startswith("Successfully"):
+                res_str = str(res)
+                action_status = "error" if res_str.lower().startswith("error") else "success"
+                ticket.record_action(tool=fc.name, detail=detail, status=action_status)
+                if self.run_logger and hasattr(self.run_logger, "action_completed"):
+                    self.run_logger.action_completed(self.agent_id, ticket.id, fc.name, detail, action_status)
+
+                if fc.name in MUTATING_TOOLS and res_str.startswith("Successfully"):
                     guard.reset_call_counts()
                 tool_responses.append(
                     types.Part(
                         function_response=types.FunctionResponse(
                             name=fc.name,
-                            response={"result": str(res)},
+                            response={"result": res_str},
                         )
                     )
                 )
