@@ -15,6 +15,14 @@ def test_dag_rejects_unknown_dependency():
     with pytest.raises(ValueError, match="unknown ticket"):
         TicketDAG(tickets)
 
+def test_dag_rejects_duplicate_dependencies():
+    tickets = [
+        Ticket(id="T1", title="Base", description="..."),
+        Ticket(id="T2", title="Child", description="...", depends_on=["T1", "T1"]),
+    ]
+    with pytest.raises(ValueError, match="duplicate dependencies"):
+        TicketDAG(tickets)
+
 def test_dag_blocks_downstream_on_upstream_failure():
     t1 = Ticket(id="T1", title="Base", description="...")
     t2 = Ticket(id="T2", title="Child", description="...", depends_on=["T1"])

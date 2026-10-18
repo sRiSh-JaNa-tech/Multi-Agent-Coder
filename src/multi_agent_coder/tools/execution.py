@@ -107,21 +107,22 @@ def run_sandboxed_command(
         )
 
 
-def _get_target_root(tool_input: dict[str, Any], workspace_root: Path | None = None) -> Path:
+def _get_target_root(tool_input: dict[str, Any] | None = None, workspace_root: Path | None = None) -> Path:
     if workspace_root:
-        return workspace_root
-    repo = tool_input.get("repo")
-    if repo:
-        p = Path(repo).expanduser()
-        if p.is_dir():
-            return p
-        try:
-            from .repo import find_repo_path
-            found = find_repo_path(repo)
-            if found:
-                return found
-        except Exception:
-            pass
+        return Path(workspace_root).resolve()
+    if tool_input:
+        repo = tool_input.get("repo")
+        if repo:
+            p = Path(repo).expanduser()
+            if p.is_dir():
+                return p
+            try:
+                from .repo import find_repo_path
+                found = find_repo_path(repo)
+                if found:
+                    return found
+            except Exception:
+                pass
     return Path.cwd()
 
 
@@ -295,9 +296,10 @@ def execute_check_syntax(tool_input: dict[str, Any], workspace_root: Path | None
     return f"SyntaxError in {filepath}:\n{res.stderr or res.stdout}"
 
 
-def execute_git_diff(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
-    root = _get_target_root(tool_input, workspace_root)
-    filepath = tool_input.get("filepath")
+def execute_git_diff(tool_input: dict[str, Any] | None = None, workspace_root: Path | None = None) -> str:
+    inp = tool_input or {}
+    root = _get_target_root(inp, workspace_root)
+    filepath = inp.get("filepath")
     cmd = ["git", "diff"]
     if filepath:
         cmd.append(filepath.lstrip("/\\"))
@@ -305,8 +307,9 @@ def execute_git_diff(tool_input: dict[str, Any], workspace_root: Path | None = N
     return res.stdout if res.stdout else "No changes detected (clean working tree)."
 
 
-def execute_git_status(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
-    root = _get_target_root(tool_input, workspace_root)
+def execute_git_status(tool_input: dict[str, Any] | None = None, workspace_root: Path | None = None) -> str:
+    inp = tool_input or {}
+    root = _get_target_root(inp, workspace_root)
     cmd = ["git", "status", "--short"]
     res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=10)
     return res.stdout if res.stdout else "Clean working tree (no changes)."

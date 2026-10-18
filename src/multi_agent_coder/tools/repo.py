@@ -224,16 +224,25 @@ def merge_worktree(repo_dir: Path, ticket_id: str, target_branch: str = "main") 
     # Commit any uncommitted changes in the worktree if present
     worktree_path = repo / ".worktrees" / f"ticket-{ticket_id.lower()}"
     if worktree_path.exists():
-        subprocess.run(["git", "add", "-A"], cwd=str(worktree_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(
+        add_result = subprocess.run(["git", "add", "-A"], cwd=str(worktree_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if add_result.returncode != 0:
+            raise RuntimeError(f"Failed to stage worktree changes: {add_result.stderr.strip()}")
+        commit_result = subprocess.run(
             ["git", "commit", "-m", f"Auto-commit ticket {ticket_id}"],
             cwd=str(worktree_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
         )
+        if commit_result.returncode != 0 and "nothing to commit" not in commit_result.stdout.lower():
+            raise RuntimeError(f"Failed to commit worktree changes: {commit_result.stderr.strip()}")
 
     # Merge branch into target branch in repo_dir
-    subprocess.run(["git", "checkout", target_branch], cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    checkout_result = subprocess.run(
+        ["git", "checkout", target_branch], cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    if checkout_result.returncode != 0:
+        raise RuntimeError(f"Failed to checkout target branch '{target_branch}': {checkout_result.stderr.strip()}" )
     cmd = ["git", "merge", branch_name, "-m", f"Merge ticket {ticket_id}"]
     subprocess.run(cmd, cwd=str(repo), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 

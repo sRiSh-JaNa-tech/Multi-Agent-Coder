@@ -100,25 +100,38 @@ def execute_search_code(
     return "\n".join(parts)
 
 
-def execute_grep(vector_store: VectorStore, _embedder: Embedder, tool_input: dict[str, Any]) -> str:
+def execute_grep(
+    vector_store: VectorStore | None = None,
+    _embedder: Embedder | None = None,
+    tool_input: dict[str, Any] | None = None,
+    workspace_root: Path | str | None = None,
+) -> str:
     """Regex search across repository files."""
-    pattern = tool_input["pattern"]
+    if tool_input is None:
+        tool_input = {}
+    pattern = tool_input.get("pattern", "")
     repo = tool_input.get("repo")
+
+    if not pattern:
+        return "Error: 'pattern' parameter is required for grep."
 
     try:
         regex = re.compile(pattern, re.IGNORECASE)
     except re.error as e:
         return f"Invalid regex pattern: {e}"
 
-    # Determine which repos to search
-    if repo:
+    # Determine which repos/directories to search
+    if workspace_root:
+        target_path = Path(workspace_root).resolve()
+        search_dirs = [target_path] if target_path.exists() else []
+    elif repo:
         target_path = find_repo_path(repo)
         search_dirs = [target_path] if target_path and target_path.exists() else []
     else:
         search_dirs = [d for d in REPOS_DIR.iterdir() if d.is_dir()] if REPOS_DIR.exists() else []
 
     if not search_dirs:
-        return "No repositories available. Use clone_and_index first."
+        return "No repositories or workspace directories available to search."
 
     matches: list[str] = []
     context_lines = 2

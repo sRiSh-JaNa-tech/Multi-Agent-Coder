@@ -12,6 +12,7 @@ import os
 import re
 import threading
 import time
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Any
 from dotenv import find_dotenv, load_dotenv
@@ -21,6 +22,17 @@ from google.genai import types
 from .ticket import Ticket, TicketStatus, TicketDAG
 from .agent_worker import AgentWorker, QueueFullError
 from .run_logger import SwarmRunLogger
+from .planner import EvidenceDrivenPlanner
+from .verifier import IndependentVerifier, VerificationResult
+from ..discovery.findings import (
+    Finding,
+    FindingCategory,
+    FindingConfidence,
+    FindingRegistry,
+    FindingSeverity,
+)
+from ..discovery.baseline import RepositoryBaseline
+from ..discovery.scanner import RepositoryScanner
 from ..common.config import SwarmConfig, resolve_workspace, parse_token_limit
 from ..common.token_budget import TokenBudget, TokenBudgetExceeded, usage_from_response
 from ..common.logging_config import setup_logging
@@ -29,6 +41,16 @@ load_dotenv(find_dotenv())
 logger = setup_logging(__name__)
 
 _UNSET: Any = object()
+
+
+class AutonomousRunState(str, Enum):
+    VERIFIED_COMPLETE = "VERIFIED_COMPLETE"
+    INCOMPLETE = "INCOMPLETE"
+    BLOCKED = "BLOCKED"
+    FAILED = "FAILED"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+    NO_PROGRESS = "NO_PROGRESS"
+    CANCELLED = "CANCELLED"
 
 
 class MainOrchestrator:
@@ -109,6 +131,19 @@ class MainOrchestrator:
                     self.run_id, self.workspace_root, self.model, self.parallel, self.auto_qa,
                     "unlimited" if self.token_limit is None else self.token_limit)
 
+        # Autonomous discovery, baseline snapshot, and independent verification
+        self.findings_registry: FindingRegistry = FindingRegistry()
+        self.baseline: RepositoryBaseline | None = None
+        self.verifier: IndependentVerifier | None = None
+
+        raw_rounds = os.getenv("MAX_PLANNING_ROUNDS", "3").strip()
+        self.max_planning_rounds: int = max(1, int(raw_rounds)) if raw_rounds.isdigit() else 3
+        raw_tot = os.getenv("MAX_TOTAL_TICKETS", "20").strip()
+        self.max_total_tickets: int = max(1, int(raw_tot)) if raw_tot.isdigit() else 20
+        raw_secs = os.getenv("MAX_WALL_CLOCK_SECONDS", "600").strip()
+        self.max_wall_clock_seconds: float = float(raw_secs) if raw_secs.replace(".", "").isdigit() else 600.0
+        self.final_status: str = AutonomousRunState.INCOMPLETE.value
+
         # Start and initialize all worker agents
         self.agents: list[AgentWorker] = []
         self._init_agents()
@@ -183,78 +218,222 @@ class MainOrchestrator:
         if objective and not getattr(self.run_logger, "objective", ""):
             self.run_logger.objective = objective
 
+    def discover_repository(self, run_tests: bool = True) -> tuple[FindingRegistry, RepositoryBaseline]:
+        """Run proactive repository discovery across the target workspace."""
+        logger.info("Executing proactive repository discovery on %s...", self.workspace_root)
+        scanner = RepositoryScanner(self.workspace_root)
+        should_run_tests = run_tests and not (self.api_key and self.api_key.startswith("dummy"))
+        self.findings_registry, self.baseline = scanner.scan(
+            objective=getattr(self.run_logger, "objective", ""),
+            run_baseline_tests=should_run_tests,
+        )
+        self.verifier = IndependentVerifier(self.workspace_root, self.baseline)
+        return self.findings_registry, self.baseline
+
     def identify_problems_and_create_tickets(self, objective: str) -> list[Ticket]:
         """
-        Main orchestrator analyzes the high-level objective, decomposes it into
-        distinct technical problems, and raises tickets.
-        Worker agents (Agents 1..N-1) execute work tickets.
-        The Nth agent (Agent-N) executes test and QA verification tickets.
+        Main orchestrator analyzes the high-level objective and discovery findings,
+        generates discrete tickets with evidence, and schedules them.
         """
-        logger.info("Main Orchestrator decomposing objective: %s", objective)
+        logger.info("Main Orchestrator planning tickets for objective: %s", objective)
         self._note_objective(objective)
 
-        tester_id = self.tester_agent.agent_id if self.tester_agent else f"Agent-{self.max_agents}"
-        workers_count = max(1, self.max_agents - 1) if self.max_agents > 1 else 1
-        prompt = f"""You are the Main Orchestrator of an autonomous multi-agent coding team with {self.max_agents} agents.
-The team structure has dedicated worker agents (Agents 1 to {workers_count}) who implement code, and an Nth agent ({tester_id}) who acts as the dedicated QA & Test Verification Engineer.
+        # Ensure discovery has run
+        if self.baseline is None:
+            self.discover_repository(run_tests=True)
 
-Analyze the following objective and break it down into 2 to 6 concrete tickets:
-1. One or more implementation tickets (category: "coding", "refactor", or "analysis") for worker agents.
-2. A final verification and testing ticket (category: "testing") that depends on the completion of the implementation tickets, to be executed by the dedicated Tester agent.
-
-OBJECTIVE:
-{objective}
-
-Categories should be one of: "analysis", "coding", "testing", "refactor", "docs".
-
-Respond ONLY with a JSON array of ticket objects:
-[
-  {{
-    "title": "Short descriptive title",
-    "description": "Specific problem statement and requirements",
-    "category": "analysis" | "coding" | "testing" | "refactor" | "docs"
-  }}
-]"""
-
-        tickets: list[Ticket] = []
-        try:
-            if self.api_key and not self.api_key.startswith("dummy"):
-                self.token_budget.check()
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction="You are a Chief Software Architect and Orchestrator. Output valid JSON array only."
-                    )
-                )
-                p, c, tot = usage_from_response(response)
-                self.token_budget.record(tot)
-                self.run_logger.llm_usage("orchestrator", None, p, c, tot, self.token_budget.used)
-                text = (response.text or "").strip()
-                match = re.search(r"\[.*\]", text, re.DOTALL)
-                if match:
-                    parsed = json.loads(match.group(0))
-                    for item in parsed:
-                        ticket = Ticket.create(
-                            title=item.get("title", "Untitled Ticket"),
-                            description=item.get("description", ""),
-                            category=item.get("category", "coding"),
-                        )
-                        tickets.append(ticket)
-        except Exception as e:
-            logger.warning("LLM ticket decomposition error: %s (falling back to heuristic decomposition)", e)
-
-        # Fallback heuristic decomposition if LLM did not produce tickets
-        if not tickets:
-            tickets = self._heuristic_problem_decomposition(objective)
+        planner = EvidenceDrivenPlanner(
+            workspace_root=self.workspace_root,
+            model=self.model,
+            api_key=self.api_key,
+            client=self._client,
+            token_budget=self.token_budget,
+        )
+        tickets = planner.plan(
+            objective=objective,
+            findings=self.findings_registry,
+            baseline=self.baseline,
+            previous_tickets=self.all_tickets,
+        )
 
         for t in tickets:
             self.all_tickets.append(t)
             self.pending_backlog.append(t)
             self.run_logger.ticket_created(t)
 
-        logger.info("Main Orchestrator identified and raised %d tickets.", len(tickets))
+        logger.info("Main Orchestrator identified and raised %d evidence-backed tickets.", len(tickets))
         return tickets
+
+    def run_autonomous_loop(
+        self,
+        objective: str,
+        mode: str = "autonomous",
+        on_step_callback: Callable[[Ticket], None] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Closed-loop autonomous engineering control loop:
+        1. Proactive Discovery (baseline + static scan)
+        2. Evidence-Driven Planning
+        3. Execution (bounded concurrency / sequential)
+        4. Independent Verification (scope, syntax, tests, diff)
+        5. Assessment & Feedback (extract worker findings, generate follow-up tickets)
+        6. Iterate until verified complete, budget exhausted, or stopped.
+        """
+        self._note_objective(objective)
+        start_time = time.time()
+        logger.info("=== Starting Autonomous Engineering Loop (Mode: %s) ===", mode.upper())
+        logger.info("Objective: %s", objective)
+
+        # Step 1: Discovery
+        self.discover_repository(run_tests=(mode != "plan"))
+
+        if mode == "audit":
+            confirmed_defects = [
+                f for f in self.findings_registry.list_all()
+                if f.confidence == FindingConfidence.CONFIRMED or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH)
+            ]
+            self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value if not confirmed_defects else AutonomousRunState.INCOMPLETE.value
+            summary = self.get_summary()
+            self.run_logger.finalize(summary)
+            return summary
+
+        # Step 2: Planning
+        if not self.all_tickets:
+            self.identify_problems_and_create_tickets(objective)
+
+        if mode == "plan":
+            self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+            summary = self.get_summary()
+            self.run_logger.finalize(summary)
+            return summary
+
+        # Step 3: Closed-Loop Execution and Verification
+        planning_round = 0
+        consecutive_no_progress = 0
+        verifier = self.verifier or IndependentVerifier(self.workspace_root, self.baseline)
+
+        while planning_round < self.max_planning_rounds:
+            planning_round += 1
+            logger.info("--- Autonomous Loop Round %d/%d ---", planning_round, self.max_planning_rounds)
+
+            # Check time limit
+            if time.time() - start_time > self.max_wall_clock_seconds:
+                logger.warning("Wall-clock time budget reached (%.1fs).", self.max_wall_clock_seconds)
+                self.final_status = AutonomousRunState.BUDGET_EXHAUSTED.value
+                break
+
+            # Check token limit
+            if self.token_budget.exhausted:
+                self._abort_for_budget()
+                self.final_status = AutonomousRunState.BUDGET_EXHAUSTED.value
+                break
+
+            # Execute pending work
+            unprocessed_before = len([t for t in self.all_tickets if t.status not in (TicketStatus.RESOLVED, TicketStatus.FAILED, TicketStatus.BLOCKED)])
+            if unprocessed_before > 0:
+                self.process_all_tickets(on_step_callback=on_step_callback)
+
+            # Independent verification of resolved tickets
+            failed_verification_count = 0
+            for ticket in self.all_tickets:
+                if ticket.status == TicketStatus.RESOLVED:
+                    v_res = verifier.verify_ticket(ticket)
+                    if not v_res.success:
+                        ticket.status = TicketStatus.FAILED
+                        ticket.error = f"Independent verification failed: {v_res.summary}"
+                        ticket.failure_code = "VERIFICATION_FAILED"
+                        failed_verification_count += 1
+
+            # Extract discoveries from workers
+            newly_discovered_count = 0
+            for ticket in self.all_tickets:
+                for issue in ticket.follow_up_findings:
+                    f = Finding.create(
+                        title=issue.get("title", "Worker Discovered Issue"),
+                        description=issue.get("description", ""),
+                        file_path=issue.get("file_path"),
+                        evidence=issue.get("evidence", ""),
+                        category=FindingCategory.DEFECT,
+                        confidence=FindingConfidence.HIGH,
+                        severity=FindingSeverity.HIGH,
+                    )
+                    if self.findings_registry.add(f):
+                        newly_discovered_count += 1
+                        logger.info("Added worker-discovered finding [%s]: %s", f.id, f.title)
+
+            # Aggregate verification
+            agg_res = verifier.verify_aggregate()
+
+            # Check if all completed cleanly
+            all_resolved = all(t.status == TicketStatus.RESOLVED for t in self.all_tickets)
+            if all_resolved and failed_verification_count == 0 and newly_discovered_count == 0 and agg_res.success:
+                self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+                logger.info("Autonomous Loop reached VERIFIED_COMPLETE.")
+                break
+
+            # Check max tickets budget
+            if len(self.all_tickets) >= self.max_total_tickets:
+                logger.warning("Reached maximum ticket limit (%d).", self.max_total_tickets)
+                self.final_status = AutonomousRunState.INCOMPLETE.value
+                break
+
+            # Generate follow-up tickets for next round
+            if planning_round < self.max_planning_rounds:
+                resolved_fids = {fid for t in self.all_tickets if t.status == TicketStatus.RESOLVED for fid in t.finding_ids}
+                unresolved = [
+                    f for f in self.findings_registry.list_all()
+                    if f.id not in resolved_fids and (f.confidence == FindingConfidence.CONFIRMED or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH))
+                ]
+                if not unresolved and not agg_res.regressions:
+                    if all_resolved:
+                        self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+                    else:
+                        self.final_status = AutonomousRunState.INCOMPLETE.value
+                    break
+
+                planner = EvidenceDrivenPlanner(
+                    self.workspace_root,
+                    model=self.model,
+                    api_key=self.api_key,
+                    client=self._client,
+                    token_budget=self.token_budget,
+                )
+                follow_ups = planner.plan_follow_up(
+                    objective=objective,
+                    unresolved_findings=unresolved,
+                    baseline=self.baseline,
+                    existing_tickets=self.all_tickets,
+                )
+                if not follow_ups:
+                    consecutive_no_progress += 1
+                    if consecutive_no_progress >= 2:
+                        logger.info("No further follow-up tickets possible; stopping loop.")
+                        self.final_status = AutonomousRunState.NO_PROGRESS.value
+                        break
+                else:
+                    consecutive_no_progress = 0
+                    for fu in follow_ups:
+                        if len(self.all_tickets) < self.max_total_tickets:
+                            self.all_tickets.append(fu)
+                            self.pending_backlog.append(fu)
+                            self.run_logger.ticket_created(fu)
+            else:
+                consecutive_no_progress += 1
+
+        # Final state check
+        if self.final_status == AutonomousRunState.INCOMPLETE.value:
+            if self.token_budget.exhausted:
+                self.final_status = AutonomousRunState.BUDGET_EXHAUSTED.value
+            elif all(t.status == TicketStatus.BLOCKED for t in self.all_tickets) and self.all_tickets:
+                self.final_status = AutonomousRunState.BLOCKED.value
+            elif any(t.status == TicketStatus.FAILED for t in self.all_tickets):
+                self.final_status = AutonomousRunState.FAILED.value
+            elif agg_res.success and all(t.status == TicketStatus.RESOLVED for t in self.all_tickets):
+                self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+
+        summary = self.get_summary()
+        self.run_logger.finalize(summary)
+        return summary
 
     def _heuristic_problem_decomposition(self, objective: str) -> list[Ticket]:
         """Rule-based breakdown when LLM is unavailable or in offline test mode."""
@@ -665,11 +844,15 @@ Respond ONLY with a JSON array of ticket objects:
         backlog = len(self.pending_backlog)
 
         return {
+            "status": self.final_status,
             "run_id": self.run_id,
             "model": self.model,
             "workspace_root": str(self.workspace_root),
             "token_usage": self.token_budget.snapshot(),
             "log_dir": str(self.run_logger.run_dir),
+            "findings_count": len(self.findings_registry),
+            "findings": self.findings_registry.to_dict_list(),
+            "baseline": self.baseline.to_dict() if self.baseline else None,
             "total_tickets": total,
             "resolved": resolved,
             "failed": failed,

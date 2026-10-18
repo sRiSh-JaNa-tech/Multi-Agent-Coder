@@ -52,18 +52,20 @@ MEMORY_TOOLS = [
 ]
 
 
-def execute_save_memory(memory: MemoryStore, tool_input: dict[str, Any]) -> str:
+def execute_save_memory(memory: MemoryStore | None, tool_input: dict[str, Any]) -> str:
     """Execute the save_memory tool."""
-    return memory.save(
+    mem = memory or MemoryStore()
+    return mem.save(
         category=tool_input["category"],
         content=tool_input["content"],
     )
 
 
-def execute_recall_memory(memory: MemoryStore, tool_input: dict[str, Any]) -> str:
+def execute_recall_memory(memory: MemoryStore | None, tool_input: dict[str, Any]) -> str:
     """Execute the recall_memory tool."""
+    mem = memory or MemoryStore()
     query = tool_input.get("query")
-    memories = memory.recall(query)
+    memories = mem.recall(query)
     if not memories:
         return "No memories found." + (f" (filter: '{query}')" if query else "")
 

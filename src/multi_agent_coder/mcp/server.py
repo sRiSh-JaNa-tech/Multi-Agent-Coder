@@ -86,7 +86,8 @@ def create_mcp_server() -> MCPServer:
         name="swarm_dispatch_objective",
         description=(
             "Submit a high-level problem statement. The internal orchestrator will automatically "
-            "decompose the problem into 2-6 tickets and dispatch them across the agent fleet."
+            "run proactive discovery, evidence-driven planning, execution, and closed-loop verification. "
+            "Supported modes: 'audit' (discover only), 'plan' (generate DAG only), or 'autonomous' (full loop)."
         ),
     )
     def swarm_dispatch_objective(
@@ -95,6 +96,7 @@ def create_mcp_server() -> MCPServer:
         queue_limit: int | None = None,
         workspace: str | None = None,
         token_limit: str | None = None,
+        mode: str = "autonomous",
     ) -> str:
         try:
             api_key = os.getenv("GEMINI_API_KEY", "")
@@ -107,12 +109,7 @@ def create_mcp_server() -> MCPServer:
                 objective=objective,
                 **extra,
             )
-            orchestrator.identify_problems_and_create_tickets(objective)
-            orchestrator.dispatch_all_pending()
-            orchestrator.process_all_tickets()
-
-            summary = orchestrator.get_summary()
-            summary["objective"] = objective
+            summary = orchestrator.run_autonomous_loop(objective=objective, mode=mode)
             summary["workspace_source"] = workspace_source(workspace)
             return json.dumps(summary, indent=2)
         except Exception as e:

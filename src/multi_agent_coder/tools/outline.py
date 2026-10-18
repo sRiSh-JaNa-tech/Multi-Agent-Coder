@@ -90,20 +90,28 @@ def _outline_generic(content: str, filepath: str) -> str:
     return f"No major structural definitions detected in {filepath}."
 
 
-def execute_get_file_outline(tool_input: dict[str, Any]) -> str:
+def execute_get_file_outline(tool_input: dict[str, Any], workspace_root: Path | str | None = None) -> str:
     """Execute get_file_outline tool."""
     repo = tool_input.get("repo", "")
     filepath = (tool_input.get("filepath") or tool_input.get("file") or tool_input.get("path") or "").lstrip("/\\")
-    if not repo or not filepath:
-        return "Error: 'repo' and 'filepath' parameters are required."
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
 
-    repo_path = find_repo_path(repo)
+    if workspace_root and (not repo or repo in (".", "workspace", "local", Path(workspace_root).name)):
+        repo_path = Path(workspace_root).resolve()
+    elif repo:
+        repo_path = find_repo_path(repo)
+    elif workspace_root:
+        repo_path = Path(workspace_root).resolve()
+    else:
+        repo_path = None
+
     if not repo_path:
-        return f"Repository '{repo}' not found."
+        return f"Repository '{repo}' not found and no workspace_root provided."
 
     target = repo_path / filepath
     if not target.is_file():
-        return f"File not found: {filepath} in {repo}"
+        return f"File not found: {filepath} in {repo_path}"
 
     try:
         content = target.read_text(encoding="utf-8", errors="ignore")

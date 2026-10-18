@@ -190,12 +190,26 @@ class AgentWorker:
         return True
 
     def _build_worker_tools(self) -> list[dict[str, Any]]:
-        """Declare all cmd, git, and coding tools for the sub-agent."""
+        """Declare all cmd, git, coding, search, outline, and memory tools for the sub-agent."""
         try:
-            from tools import EXECUTION_TOOLS, FILE_TOOLS, CODING_TOOLS
+            from tools import (
+                EXECUTION_TOOLS,
+                FILE_TOOLS,
+                CODING_TOOLS,
+                SEARCH_TOOLS,
+                OUTLINE_TOOLS,
+                MEMORY_TOOLS,
+            )
         except ImportError:
-            from multi_agent_coder.tools import EXECUTION_TOOLS, FILE_TOOLS, CODING_TOOLS
-        declarations = EXECUTION_TOOLS + FILE_TOOLS + CODING_TOOLS
+            from multi_agent_coder.tools import (
+                EXECUTION_TOOLS,
+                FILE_TOOLS,
+                CODING_TOOLS,
+                SEARCH_TOOLS,
+                OUTLINE_TOOLS,
+                MEMORY_TOOLS,
+            )
+        declarations = EXECUTION_TOOLS + FILE_TOOLS + CODING_TOOLS + SEARCH_TOOLS + OUTLINE_TOOLS + MEMORY_TOOLS
         if not self.allow_git_write:
             declarations = [d for d in declarations if d.get("name") not in GIT_WRITE_TOOLS]
         return [{"function_declarations": declarations}]
@@ -207,6 +221,20 @@ class AgentWorker:
                 f"Error: '{name}' is disabled for worker agents. Leave your changes uncommitted in "
                 "the working tree; the Lead Brain reviews, commits and pushes."
             )
+
+        # Enforce scope control: prevent modifying files outside the ticket's permitted target_files
+        if name in MUTATING_TOOLS and self.current_ticket and self.current_ticket.target_files:
+            file_arg = args.get("filepath") or args.get("path") or args.get("file")
+            if file_arg:
+                norm_arg = Path(file_arg).as_posix().lower()
+                allowed = [Path(tf).as_posix().lower() for tf in self.current_ticket.target_files]
+                if not any(norm_arg == tf or norm_arg.endswith("/" + tf) or tf.endswith("/" + norm_arg) for tf in allowed):
+                    return (
+                        f"Error: Modification of '{file_arg}' is forbidden because it is outside your assigned ticket scope "
+                        f"({self.current_ticket.target_files}). Leave unrelated files untouched. If this modification is required, "
+                        f"document it as a follow-up finding in your final report using: [Discovered Issue: <title>] File: {file_arg} Description: <reason>"
+                    )
+
         try:
             from tools import (
                 execute_run_command,
@@ -224,6 +252,11 @@ class AgentWorker:
                 execute_replace_file_content,
                 execute_create_file,
                 execute_list_directory,
+                execute_grep,
+                execute_search_code,
+                execute_get_file_outline,
+                execute_save_memory,
+                execute_recall_memory,
             )
         except ImportError:
             from multi_agent_coder.tools import (
@@ -242,6 +275,11 @@ class AgentWorker:
                 execute_replace_file_content,
                 execute_create_file,
                 execute_list_directory,
+                execute_grep,
+                execute_search_code,
+                execute_get_file_outline,
+                execute_save_memory,
+                execute_recall_memory,
             )
 
         root = self.workspace_root
@@ -262,6 +300,11 @@ class AgentWorker:
             "replace_file_content": lambda inp: execute_replace_file_content(inp, workspace_root=root),
             "create_file": lambda inp: execute_create_file(inp, workspace_root=root),
             "list_directory": lambda inp: execute_list_directory(None, inp, workspace_root=root),
+            "grep": lambda inp: execute_grep(tool_input=inp, workspace_root=root),
+            "search_code": lambda inp: execute_search_code(None, None, inp),
+            "get_file_outline": lambda inp: execute_get_file_outline(inp, workspace_root=root),
+            "save_memory": lambda inp: execute_save_memory(None, inp),
+            "recall_memory": lambda inp: execute_recall_memory(None, inp),
         }
         handler = dispatch.get(name)
         if not handler:
@@ -453,6 +496,21 @@ class AgentWorker:
         try:
             result = self.execute_ticket_task(ticket)
             ticket.mark_resolved(result)
+            if result:
+                for match in re.finditer(
+                    r"\[Discovered Issue:\s*(.+?)\](?:\s*File:\s*([^\s\n\r]+))?(?:\s*Description:\s*([^\n\r]+))?",
+                    result,
+                    re.IGNORECASE,
+                ):
+                    title = match.group(1).strip()
+                    file_path = match.group(2).strip() if match.group(2) else None
+                    desc = match.group(3).strip() if match.group(3) else title
+                    ticket.follow_up_findings.append({
+                        "title": title,
+                        "file_path": file_path,
+                        "description": desc,
+                        "evidence": f"Discovered by {self.agent_id} during ticket {ticket.id}",
+                    })
             logger.info("Agent [%s] RESOLVED ticket [%s] in %.2fs", self.agent_id, ticket.id, ticket.duration_seconds)
             if self.run_logger:
                 self.run_logger.ticket_completed(ticket, self.agent_id)

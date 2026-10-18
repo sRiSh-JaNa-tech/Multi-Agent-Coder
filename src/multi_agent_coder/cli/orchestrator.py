@@ -105,6 +105,13 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Disable automatic QA verification ticket generation for the Nth tester agent.",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["audit", "plan", "execute", "autonomous"],
+        default="autonomous",
+        help="Operating mode: 'audit' (discover only), 'plan' (task graph only), 'execute' (run current tickets), or 'autonomous' (full closed loop).",
+    )
     return parser.parse_args(args)
 
 
@@ -188,39 +195,48 @@ def main(cli_args: list[str] | None = None) -> None:
     if not args.headless:
         dashboard.render_header(selected_problem, orchestrator.max_agents, orchestrator.queue_limit_per_agent)
 
-    # 2. Ingest tickets
-    if manifest_tickets:
-        if not args.headless:
-            console.print(f"\n[bold yellow]Step 1: Loading manifest tickets from {args.manifest}...[/bold yellow]")
-        tickets = orchestrator.load_manifest(manifest_tickets)
-        if not args.headless:
-            console.print(f"[green][OK] Loaded and validated {len(tickets)} DAG tickets.[/green]\n")
-    else:
-        if not args.headless:
-            console.print("\n[bold yellow]Step 1: Main Orchestrator analyzing problem and raising tickets...[/bold yellow]")
-        tickets = orchestrator.identify_problems_and_create_tickets(selected_problem)
-        if not args.headless:
-            console.print(f"[green][OK] Raised {len(tickets)} problem tickets.[/green]\n")
-
-    # 3. Dispatch to agent queues
-    if not args.headless:
-        console.print("[bold yellow]Step 2: Dispatching tickets into agent queues (limit: 3 per agent)...[/bold yellow]")
-    orchestrator.dispatch_all_pending()
-
-    if not args.headless:
-        dashboard.render_state(orchestrator.agents, orchestrator.all_tickets, orchestrator.pending_backlog)
-        exec_mode = "in parallel across worker agents" if orchestrator.parallel else "synchronously one by one"
-        console.print(f"[bold yellow]Step 3: Agents executing tickets {exec_mode}...[/bold yellow]\n")
-
     def on_step(t):
         if not args.headless:
             dashboard.render_state(orchestrator.agents, orchestrator.all_tickets, orchestrator.pending_backlog)
             time.sleep(0.3)
 
-    resolved = orchestrator.process_all_tickets(on_step_callback=on_step)
+    if args.mode in ("audit", "plan"):
+        if not args.headless:
+            console.print(f"\n[bold yellow]Executing mode: {args.mode.upper()}...[/bold yellow]")
+        summary = orchestrator.run_autonomous_loop(selected_problem, mode=args.mode)
+    elif not manifest_tickets and args.mode == "autonomous":
+        if not args.headless:
+            console.print("\n[bold yellow]Starting Autonomous Engineering Loop (Discovery -> Planning -> Execution -> Verification)...[/bold yellow]")
+        summary = orchestrator.run_autonomous_loop(selected_problem, mode="autonomous", on_step_callback=on_step)
+    else:
+        # 2. Ingest tickets
+        if manifest_tickets:
+            if not args.headless:
+                console.print(f"\n[bold yellow]Step 1: Loading manifest tickets from {args.manifest}...[/bold yellow]")
+            tickets = orchestrator.load_manifest(manifest_tickets)
+            if not args.headless:
+                console.print(f"[green][OK] Loaded and validated {len(tickets)} DAG tickets.[/green]\n")
+        else:
+            if not args.headless:
+                console.print("\n[bold yellow]Step 1: Main Orchestrator analyzing problem and raising tickets...[/bold yellow]")
+            tickets = orchestrator.identify_problems_and_create_tickets(selected_problem)
+            if not args.headless:
+                console.print(f"[green][OK] Raised {len(tickets)} problem tickets.[/green]\n")
+
+        # 3. Dispatch to agent queues
+        if not args.headless:
+            console.print("[bold yellow]Step 2: Dispatching tickets into agent queues (limit: 3 per agent)...[/bold yellow]")
+        orchestrator.dispatch_all_pending()
+
+        if not args.headless:
+            dashboard.render_state(orchestrator.agents, orchestrator.all_tickets, orchestrator.pending_backlog)
+            exec_mode = "in parallel across worker agents" if orchestrator.parallel else "synchronously one by one"
+            console.print(f"[bold yellow]Step 3: Agents executing tickets {exec_mode}...[/bold yellow]\n")
+
+        resolved = orchestrator.process_all_tickets(on_step_callback=on_step)
+        summary = orchestrator.get_summary()
 
     # 4. Final summary output
-    summary = orchestrator.get_summary()
     summary["objective"] = selected_problem
 
     if not args.headless:
