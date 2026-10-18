@@ -2,7 +2,7 @@
 Tool Registry for Multi-Agent Codebase Navigator & Coding Agent.
 """
 
-from .files import FILE_TOOLS, execute_list_directory, execute_read_file
+from .files import FILE_TOOLS, execute_find_files, execute_list_directory, execute_read_file
 from .memory import MEMORY_TOOLS, execute_recall_memory, execute_save_memory
 from .repo import REPO_TOOLS, execute_clone_and_index, execute_list_repos, find_repo_path, normalize_collection_name
 from .search import SEARCH_TOOLS, execute_grep, execute_search_code
@@ -35,6 +35,7 @@ __all__ = [
     # Tool executors
     "execute_read_file",
     "execute_list_directory",
+    "execute_find_files",
     "execute_save_memory",
     "execute_recall_memory",
     "execute_clone_and_index",

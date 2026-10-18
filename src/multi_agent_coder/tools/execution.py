@@ -253,7 +253,19 @@ def execute_run_command(tool_input: dict[str, Any], workspace_root: Path | None 
         return "Error: 'command' parameter is required."
 
     if sys.platform == "win32":
-        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd_str]
+        lower = cmd_str.strip().lower()
+        # When cmd.exe syntax, builtins, or explicit cmd /c are used (e.g. dir /s /b, tree, where, findstr),
+        # run directly in cmd.exe so switches (/s, /b) and cmd piping work cleanly without PowerShell errors.
+        if lower.startswith(("cmd ", "cmd.exe ", "dir ", "dir/", "tree", "type ", "where ", "findstr ")):
+            if lower.startswith("cmd.exe /c "):
+                cmd_to_run = cmd_str[len("cmd.exe /c "):]
+            elif lower.startswith("cmd /c "):
+                cmd_to_run = cmd_str[len("cmd /c "):]
+            else:
+                cmd_to_run = cmd_str
+            cmd = ["cmd.exe", "/c", cmd_to_run]
+        else:
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd_str]
     else:
         cmd = ["/bin/sh", "-c", cmd_str]
 

@@ -113,7 +113,13 @@ def resolve_workspace(explicit: str | Path | None = None, default: Path | None =
     """
     candidate: str | Path | None = explicit
     if not candidate:
-        candidate = first_env("TARGET_WORKSPACE") or None
+        raw = first_env("TARGET_WORKSPACE")
+        if raw and raw.strip():
+            stripped = raw.strip()
+            if stripped in (".", "./", ".\\"):
+                candidate = Path.cwd()
+            else:
+                candidate = stripped
     if not candidate and default is not None:
         candidate = default
     path = Path(candidate).expanduser() if candidate else Path.cwd()
@@ -127,8 +133,11 @@ def workspace_source(explicit: str | Path | None) -> str:
     """Describe where the workspace came from (for status/log output)."""
     if explicit:
         return "argument"
-    if first_env("TARGET_WORKSPACE"):
+    raw = first_env("TARGET_WORKSPACE")
+    if raw and raw.strip() and raw.strip() not in (".", "./", ".\\"):
         return "TARGET_WORKSPACE"
+    if raw and raw.strip() in (".", "./", ".\\"):
+        return "current_dir"
     return "default"
 
 

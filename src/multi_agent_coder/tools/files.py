@@ -55,6 +55,26 @@ FILE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "find_files",
+        "description": "Find files matching a glob pattern (e.g. '**/*.js', '*compress*') relative to the workspace root.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern to match files (e.g., '**/*.py', '*config*', '*.json'). Default: '**/*'.",
+                    "default": "**/*",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Subdirectory to search inside (default: workspace root).",
+                    "default": "",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -170,3 +190,46 @@ def execute_list_directory(
             lines.append(f"  [file] {entry.name} ({size_str})")
 
     return "\n".join(lines)
+
+
+def execute_find_files(
+    _vector_store: Any, tool_input: dict[str, Any], workspace_root: Path | None = None
+) -> str:
+    """Find files matching a glob pattern inside workspace_root."""
+    pattern = (tool_input.get("pattern") or "**/*").strip()
+    subpath = (
+        tool_input.get("path")
+        or tool_input.get("subpath")
+        or tool_input.get("directory_path")
+        or ""
+    ).lstrip("/\\")
+
+    target, error, label = _resolve_target(tool_input, subpath, workspace_root)
+    if error:
+        return error
+    if not target.is_dir():
+        return f"Directory not found: {subpath or '/'} in {label}"
+
+    glob_pattern = pattern if ("*" in pattern or "?" in pattern) else f"*{pattern}*"
+    matches: list[str] = []
+    count = 0
+    max_matches = 100
+
+    try:
+        for p in target.rglob(glob_pattern):
+            rel = p.relative_to(target)
+            if any(part.startswith(".") or part in ("node_modules", "__pycache__", ".venv") for part in rel.parts):
+                continue
+            display_path = (Path(subpath) / rel).as_posix() if subpath else rel.as_posix()
+            matches.append(display_path + ("/" if p.is_dir() else ""))
+            count += 1
+            if count >= max_matches:
+                matches.append(f"... [truncated at {max_matches} results]")
+                break
+    except Exception as exc:
+        return f"Error finding files with pattern '{pattern}': {exc}"
+
+    if not matches:
+        return f"No files found matching '{pattern}' in {subpath or '.'}"
+    return f"Found {len(matches)} matches for '{pattern}':\n" + "\n".join(f"  {m}" for m in matches)
+

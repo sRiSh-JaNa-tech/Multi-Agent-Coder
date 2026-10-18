@@ -31,8 +31,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
 def _workspace(workspace: str | None) -> Path:
-    """Target project: explicit arg > TARGET_WORKSPACE > swarm repo (legacy default)."""
-    return resolve_workspace(workspace, default=REPO_ROOT)
+    """Target project: explicit arg > TARGET_WORKSPACE > current working directory (cwd)."""
+    return resolve_workspace(workspace, default=Path.cwd())
 
 
 def create_mcp_server() -> MCPServer:

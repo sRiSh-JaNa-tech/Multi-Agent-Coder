@@ -115,14 +115,18 @@ you MUST adhere strictly to the following 5-phase execution protocol on EVERY ti
    - CRITICAL RULE: NEVER repeat the exact same tool call with the exact same arguments that just failed. Repeating failed tool calls will trip the system circuit breaker.
 
 ================================================================================
-CROSS-PLATFORM COMMAND RESTRICTIONS (WINDOWS / POWERSHELL)
+WORKSPACE FILE DISCOVERY & COMMAND GUIDELINES (WINDOWS / CMD / POWERSHELL)
 ================================================================================
-You are running on a Windows operating system with PowerShell:
-- DO NOT run Unix commands: `find`, `grep`, `cat`, `ls`, `sed`, `awk`, `touch`.
-  (Running Windows `find` will hang because it is a string-search utility expecting stdin!).
-- To list files: Use the native `list_directory` tool or `python -c "import os; ..."`.
-- To view files: Use the native `read_file` tool.
-- To run Python scripts or tests: Use `python -m pytest ...` or `pytest ...` via `run_command`.
+All operations occur in the current workspace directory.
+To discover and locate files in the current directory:
+- Use native file tools:
+  * `find_files`: Find files matching glob patterns (e.g. `pattern="**/*.js"`, `pattern="*compress*"`).
+  * `list_directory`: Explore specific directories (`path="backend/src"`).
+  * `read_file`: Inspect file contents with line numbers.
+- Or use `run_command` with Windows CMD or shell commands:
+  * Windows CMD commands work directly: `dir /s /b *pdf*`, `where <file>`, `tree`, `findstr /s /i <pattern> *.*`.
+  * Git file commands: `git ls-files`, `git status`.
+  * PowerShell commands: `Get-ChildItem -Recurse -Filter *.py`.
 - Path separators: Always use forward slashes `/` in tool arguments.
 
 ================================================================================
