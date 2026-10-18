@@ -279,7 +279,16 @@ def execute_check_syntax(tool_input: dict[str, Any], workspace_root: Path | None
     if not target.exists():
         return f"Error: File not found: {filepath}"
 
-    cmd = [sys.executable, "-m", "py_compile", str(target)]
+    ext = target.suffix.lower()
+    if ext in (".js", ".mjs", ".cjs"):
+        cmd = ["node", "--check", str(target)]
+    elif ext in (".py", ".pyw"):
+        cmd = [sys.executable, "-m", "py_compile", str(target)]
+    elif ext in (".json",):
+        cmd = [sys.executable, "-m", "json.tool", str(target)]
+    else:
+        return f"Syntax valid (skipped non-script file): {filepath}"
+
     res = run_sandboxed_command(cmd, cwd=root, timeout_seconds=10)
     if res.exit_code == 0:
         return f"Syntax valid: {filepath}"
