@@ -298,6 +298,15 @@ class AgentWorker:
                     continue
                 raise AgentFailure("LLM_ERROR", f"{type(exc).__name__}: {exc}") from exc
 
+            if not response.candidates or not response.candidates[0].content:
+                if attempt < LLM_ATTEMPTS:
+                    delay = LLM_RETRY_BASE_DELAY * attempt
+                    logger.warning("Agent [%s] empty LLM candidate content; retry %d/%d in %.1fs",
+                                   self.agent_id, attempt, LLM_ATTEMPTS - 1, delay)
+                    time.sleep(delay)
+                    continue
+                raise AgentFailure("EMPTY_RESPONSE", "Model returned no content after retries.")
+
             self._account_usage(response, ticket)
             return response
         raise AgentFailure("LLM_ERROR", "LLM call failed after retries.")  # pragma: no cover
