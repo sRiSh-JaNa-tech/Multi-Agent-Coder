@@ -72,7 +72,7 @@ def create_mcp_server() -> MCPServer:
             )
             orchestrator.load_manifest({"objective": objective, "tickets": tickets})
             orchestrator.dispatch_all_pending()
-            orchestrator.process_all_tickets_synchronously()
+            orchestrator.process_all_tickets()
 
             summary = orchestrator.get_summary()
             summary["objective"] = objective
@@ -109,7 +109,7 @@ def create_mcp_server() -> MCPServer:
             )
             orchestrator.identify_problems_and_create_tickets(objective)
             orchestrator.dispatch_all_pending()
-            orchestrator.process_all_tickets_synchronously()
+            orchestrator.process_all_tickets()
 
             summary = orchestrator.get_summary()
             summary["objective"] = objective

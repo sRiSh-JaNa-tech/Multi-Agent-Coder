@@ -5,10 +5,12 @@ and dispatches them to agents with a strict per-agent queue limit of 3.
 Agents process tasks synchronously one by one.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Any
@@ -47,6 +49,8 @@ class MainOrchestrator:
         workspace_root: Path | str | None = None,
         token_limit: Any = _UNSET,
         objective: str = "",
+        parallel: bool | None = None,
+        auto_qa: bool | None = None,
     ) -> None:
         self.config = SwarmConfig.from_env()
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
@@ -57,6 +61,9 @@ class MainOrchestrator:
             self.config.token_usage_limit if token_limit is _UNSET else parse_token_limit(token_limit)
         )
         self.token_budget = TokenBudget(self.token_limit)
+        self.parallel: bool = self.config.parallel if parallel is None else bool(parallel)
+        self.auto_qa: bool = self.config.auto_qa if auto_qa is None else bool(auto_qa)
+        self._lock = threading.Lock()
         
         # Read max_agents from argument or .env (MAX_AGENTS / MAX_ACTIVE_AGENTS, default: 3)
         if max_agents is None:
@@ -98,8 +105,8 @@ class MainOrchestrator:
             queue_limit=self.queue_limit_per_agent,
         )
         self.run_id = self.run_logger.run_id
-        logger.info("Swarm run %s | workspace=%s | model=%s | token_limit=%s",
-                    self.run_id, self.workspace_root, self.model,
+        logger.info("Swarm run %s | workspace=%s | model=%s | parallel=%s | auto_qa=%s | token_limit=%s",
+                    self.run_id, self.workspace_root, self.model, self.parallel, self.auto_qa,
                     "unlimited" if self.token_limit is None else self.token_limit)
 
         # Start and initialize all worker agents
@@ -114,35 +121,63 @@ class MainOrchestrator:
             self._client = genai.Client(api_key=self.api_key) if self.api_key else genai.Client()
         return self._client
 
-    def _init_agents(self) -> None:
-        """Start all worker agents up to max_agents."""
-        roles = [
-            ("Agent-1", "Code Navigator & System Analyst", "analysis"),
-            ("Agent-2", "Core Implementation & Coding Engineer", "coding"),
-            ("Agent-3", "Test Automation & Validation Engineer", "testing"),
-            ("Agent-4", "Refactoring & Performance Engineer", "refactor"),
-            ("Agent-5", "Documentation & Architecture Specialist", "docs"),
-        ]
+    @property
+    def tester_agent(self) -> AgentWorker | None:
+        """The dedicated Nth agent responsible for test execution and QA verification."""
+        for a in reversed(self.agents):
+            if getattr(a, "is_tester", False):
+                return a
+        return None
 
-        logger.info("Main Orchestrator launching %d agents (queue limit: %d each)...",
-                    self.max_agents, self.queue_limit_per_agent)
+    @property
+    def worker_agents(self) -> list[AgentWorker]:
+        """All agents responsible for analysis, implementation, refactoring, and docs."""
+        workers = [a for a in self.agents if not getattr(a, "is_tester", False)]
+        return workers if workers else self.agents
+
+    def _init_agents(self) -> None:
+        """
+        Start all worker agents up to max_agents.
+        N-1 agents are Worker Agents (analysis, coding, refactor, docs).
+        The Nth agent (Agent-N) is always the dedicated QA & Test Verification Engineer.
+        """
+        worker_roles = [
+            ("Code Navigator & System Analyst", "analysis"),
+            ("Core Implementation & Coding Engineer", "coding"),
+            ("Refactoring & Performance Engineer", "refactor"),
+            ("Architecture & Documentation Specialist", "docs"),
+        ]
+        qa_role = ("Lead QA & Test Verification Engineer", "testing")
+
+        logger.info("Main Orchestrator launching %d agents (queue limit: %d each, parallel: %s)...",
+                    self.max_agents, self.queue_limit_per_agent, self.parallel)
 
         names = self.config.agent_names
         for i in range(self.max_agents):
-            role_meta = roles[i % len(roles)]
             agent_id = names[i] if i < len(names) else f"Agent-{i+1}"
+            is_tester = (i == self.max_agents - 1 and self.max_agents >= 2)
+            if is_tester:
+                role_name, specialty = qa_role
+            else:
+                role_name, specialty = worker_roles[i % len(worker_roles)]
+
             worker = AgentWorker(
                 agent_id=agent_id,
-                role=role_meta[1],
-                specialty=role_meta[2],
+                role=role_name,
+                specialty=specialty,
                 queue_limit=self.queue_limit_per_agent,
                 model=self.model,
                 api_key=self.api_key,
                 workspace_root=self.workspace_root,
                 token_budget=self.token_budget,
                 run_logger=self.run_logger,
+                is_tester=is_tester,
             )
             self.agents.append(worker)
+            if is_tester:
+                logger.info("Designated [%s] as the dedicated QA & Test Verification Agent (Nth agent).", agent_id)
+            else:
+                logger.info("Registered worker [%s] as %s (%s).", agent_id, role_name, specialty)
 
     def _note_objective(self, objective: str) -> None:
         if objective and not getattr(self.run_logger, "objective", ""):
@@ -152,12 +187,20 @@ class MainOrchestrator:
         """
         Main orchestrator analyzes the high-level objective, decomposes it into
         distinct technical problems, and raises tickets.
+        Worker agents (Agents 1..N-1) execute work tickets.
+        The Nth agent (Agent-N) executes test and QA verification tickets.
         """
         logger.info("Main Orchestrator decomposing objective: %s", objective)
         self._note_objective(objective)
 
-        prompt = f"""You are the Main Orchestrator of an autonomous multi-agent coding team.
-Analyze the following objective and break it down into 2 to 6 concrete, independent problem tickets.
+        tester_id = self.tester_agent.agent_id if self.tester_agent else f"Agent-{self.max_agents}"
+        workers_count = max(1, self.max_agents - 1) if self.max_agents > 1 else 1
+        prompt = f"""You are the Main Orchestrator of an autonomous multi-agent coding team with {self.max_agents} agents.
+The team structure has dedicated worker agents (Agents 1 to {workers_count}) who implement code, and an Nth agent ({tester_id}) who acts as the dedicated QA & Test Verification Engineer.
+
+Analyze the following objective and break it down into 2 to 6 concrete tickets:
+1. One or more implementation tickets (category: "coding", "refactor", or "analysis") for worker agents.
+2. A final verification and testing ticket (category: "testing") that depends on the completion of the implementation tickets, to be executed by the dedicated Tester agent.
 
 OBJECTIVE:
 {objective}
@@ -223,53 +266,146 @@ Respond ONLY with a JSON array of ticket objects:
                 tickets.append(Ticket.create(title=line[:50], description=line, category=cat))
             return tickets
 
-        # Default standard 3-phase decomposition for single-line objective
-        return [
-            Ticket.create(
-                title=f"Analyze requirements for: {objective[:40]}",
-                description=f"Inspect system architecture, dependencies, and requirements for: {objective}",
-                category="analysis",
+        # Standard 3-phase decomposition for single-line objective:
+        # Phase 1: Analysis
+        t_analysis = Ticket.create(
+            title=f"Analyze requirements for: {objective[:40]}",
+            description=f"Inspect system architecture, dependencies, and requirements for: {objective}",
+            category="analysis",
+        )
+        # Phase 2: Coding
+        t_coding = Ticket.create(
+            title=f"Implement changes for: {objective[:40]}",
+            description=f"Implement code logic, functions, or fixes needed for: {objective}",
+            category="coding",
+            depends_on=[t_analysis.id],
+        )
+        # Phase 3: QA Verification & Testing by the Nth agent
+        t_testing = Ticket.create(
+            title=f"Validate and test: {objective[:40]}",
+            description=f"Write tests, verify syntax, and confirm solution for: {objective}",
+            category="testing",
+            depends_on=[t_coding.id],
+        )
+        return [t_analysis, t_coding, t_testing]
+
+    def _create_qa_verification_ticket(self, parent_ticket: Ticket) -> Ticket | None:
+        """
+        Ensure the Nth agent (Tester) tests and validates code changes made by worker agents.
+        If a coding/refactor ticket completes and the run does not already include dedicated testing tickets,
+        raise a QA verification ticket assigned to the Tester agent.
+        """
+        if not self.auto_qa or not self.tester_agent:
+            return None
+
+        # Only work tickets that modify code trigger QA validation
+        if parent_ticket.category not in ("coding", "refactor"):
+            return None
+
+        # If the DAG or ticket set already includes testing/qa tickets, the Nth agent
+        # is already tasked with testing in the workflow.
+        has_testing_tickets = any(
+            t.category in ("testing", "qa") and not t.id.startswith("TICK-QA-")
+            for t in self.all_tickets
+        )
+        if has_testing_tickets:
+            return None
+
+        # Check if an existing QA verification ticket was already generated
+        for t in self.all_tickets:
+            if t.id == f"TICK-QA-{parent_ticket.id}":
+                return None
+            if parent_ticket.id in t.depends_on and t.category in ("testing", "qa"):
+                return None
+
+        qa_ticket = Ticket.create(
+            title=f"QA Verification: Test changes for [{parent_ticket.id}] {parent_ticket.title[:35]}",
+            description=(
+                f"You are the dedicated QA & Test Verification Engineer ({self.tester_agent.agent_id}).\n"
+                f"Worker agent {parent_ticket.assigned_agent_id} completed implementation ticket {parent_ticket.id}: '{parent_ticket.title}'.\n\n"
+                f"Worker Output Summary:\n{parent_ticket.result or 'No output recorded'}\n\n"
+                "YOUR MANDATORY QA VERIFICATION CHECKLIST:\n"
+                "1. Inspect changes using `git_status` and `git_diff`.\n"
+                "2. Run `check_syntax` on any modified files.\n"
+                "3. Execute test suites (`run_command`) such as pytest or node tests.\n"
+                "4. Confirm no regressions or broken functionality.\n"
+                "5. Output your detailed QA test report adhering to [Agent Status: RESOLVED] and report findings to the Main Orchestrator."
             ),
-            Ticket.create(
-                title=f"Implement changes for: {objective[:40]}",
-                description=f"Implement code logic, functions, or fixes needed for: {objective}",
-                category="coding",
-            ),
-            Ticket.create(
-                title=f"Validate and test: {objective[:40]}",
-                description=f"Write tests, verify syntax, and confirm solution for: {objective}",
-                category="testing",
-            ),
-        ]
+            category="testing",
+            depends_on=[parent_ticket.id],
+        )
+        qa_ticket.id = f"TICK-QA-{parent_ticket.id}"
+        self.all_tickets.append(qa_ticket)
+        self.pending_backlog.append(qa_ticket)
+        self.run_logger.ticket_created(qa_ticket)
+        logger.info("Main Orchestrator created QA verification ticket [%s] for Tester Agent [%s]",
+                    qa_ticket.id, self.tester_agent.agent_id)
+        return qa_ticket
 
     def dispatch_ticket(self, ticket: Ticket) -> AgentWorker | None:
         """
         Dispatch a single ticket to the most suitable agent that has queue capacity (< 3).
-        Priority:
-        1. Agent matching ticket category/specialty with queue < 3.
-        2. Any agent with the shortest queue (< 3).
-        3. If all agents are full (each has 3 queued), remains in pending_backlog.
+        Strategy:
+        1. If ticket category is testing/qa:
+           Strictly dispatch to self.tester_agent (if present).
+        2. If ticket category is specific work (coding, analysis, refactor, docs):
+           Strictly dispatch to worker agents (Agents 1..N-1).
+        3. If ticket category is general or worker queues are full, allow tester agent to take general work.
+        4. If no candidate agents have capacity, ticket stays in pending_backlog.
         """
-        # Candidate agents with capacity
-        available_agents = [a for a in self.agents if a.can_accept_ticket()]
-        if not available_agents:
-            logger.info("All agent queues are full (limit %d). Ticket %s held in backlog.",
-                        self.queue_limit_per_agent, ticket.id)
+        if ticket.assigned_agent_id:
+            for a in self.agents:
+                if a.agent_id == ticket.assigned_agent_id:
+                    if ticket not in a.queue and a.can_accept_ticket():
+                        a.enqueue_ticket(ticket)
+                        if ticket in self.pending_backlog:
+                            self.pending_backlog.remove(ticket)
+                    return a
+
+        # 1. Testing tickets route strictly to tester agent
+        if ticket.category in ("testing", "qa") and self.tester_agent:
+            if self.tester_agent.can_accept_ticket():
+                self.tester_agent.enqueue_ticket(ticket)
+                if ticket in self.pending_backlog:
+                    self.pending_backlog.remove(ticket)
+                return self.tester_agent
+            logger.info("Tester agent [%s] queue is full (limit %d). Ticket %s held in backlog.",
+                        self.tester_agent.agent_id, self.queue_limit_per_agent, ticket.id)
             return None
 
-        # 1. Match by specialty
-        specialty_match = [a for a in available_agents if a.specialty == ticket.category]
-        if specialty_match:
-            chosen_agent = min(specialty_match, key=lambda a: a.queue_size)
-        else:
-            # 2. Pick agent with fewest queued items
-            chosen_agent = min(available_agents, key=lambda a: a.queue_size)
+        # 2. Specific work tickets route strictly to worker agents
+        available_workers = [a for a in self.worker_agents if a.can_accept_ticket()]
+        if available_workers:
+            # To maximize concurrent parallelism, prefer idle worker agents first
+            idle_matching = [a for a in available_workers if a.specialty == ticket.category and a.queue_size == 0]
+            if idle_matching:
+                chosen_agent = idle_matching[0]
+            else:
+                other_idle = [a for a in available_workers if a.queue_size == 0]
+                if other_idle:
+                    chosen_agent = other_idle[0]
+                else:
+                    specialty_match = [a for a in available_workers if a.specialty == ticket.category]
+                    if specialty_match:
+                        chosen_agent = min(specialty_match, key=lambda a: a.queue_size)
+                    else:
+                        chosen_agent = min(available_workers, key=lambda a: a.queue_size)
 
-        chosen_agent.enqueue_ticket(ticket)
-        if ticket in self.pending_backlog:
-            self.pending_backlog.remove(ticket)
+            chosen_agent.enqueue_ticket(ticket)
+            if ticket in self.pending_backlog:
+                self.pending_backlog.remove(ticket)
+            return chosen_agent
 
-        return chosen_agent
+        # 3. If ticket is general and all workers are full, tester agent can take general capacity
+        if ticket.category == "general" and self.tester_agent and self.tester_agent.can_accept_ticket():
+            self.tester_agent.enqueue_ticket(ticket)
+            if ticket in self.pending_backlog:
+                self.pending_backlog.remove(ticket)
+            return self.tester_agent
+
+        logger.info("All eligible agent queues are full (limit %d). Ticket %s held in backlog.",
+                    self.queue_limit_per_agent, ticket.id)
+        return None
 
     def dispatch_all_pending(self) -> int:
         """Attempt to dispatch all pending backlog tickets to agents with capacity."""
@@ -359,6 +495,8 @@ Respond ONLY with a JSON array of ticket objects:
                     if completed:
                         resolved_tickets.append(completed)
                         work_done_in_round = True
+                        if self.auto_qa and completed.status == TicketStatus.RESOLVED:
+                            self._create_qa_verification_ticket(completed)
 
                     # Fill freed slots / unlock dependents / block failed chains
                     self.dispatch_all_pending()
@@ -375,6 +513,102 @@ Respond ONLY with a JSON array of ticket objects:
 
         self.run_logger.finalize(self.get_summary())
         return resolved_tickets
+
+    def process_all_tickets_parallel(
+        self,
+        on_step_callback: Callable[[Ticket], None] | None = None
+    ) -> list[Ticket]:
+        """
+        Executes tickets concurrently across agents using ThreadPoolExecutor.
+        Independent tickets run in parallel on separate worker agents.
+        Dependencies are respected via TicketDAG / _deps_satisfied.
+        Freed slots and newly unlocked tickets are dispatched dynamically as agents finish.
+        The Nth agent performs independent QA validation of completed changes.
+        """
+        resolved_tickets: list[Ticket] = []
+        callback_lock = threading.Lock()
+
+        def safe_callback(ticket: Ticket) -> None:
+            if on_step_callback:
+                with callback_lock:
+                    on_step_callback(ticket)
+
+        # Initial dispatch into available queues
+        with self._lock:
+            self.dispatch_all_pending()
+
+        active_futures: dict[concurrent.futures.Future, AgentWorker] = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_agents) as executor:
+            while True:
+                # 1. Budget check
+                if self.token_budget.exhausted:
+                    with self._lock:
+                        self._abort_for_budget()
+                    break
+
+                # 2. Launch tickets on all idle agents that have queued tickets
+                with self._lock:
+                    busy_agents = set(active_futures.values())
+                    for agent in self.agents:
+                        if agent not in busy_agents and agent.queue_size > 0:
+                            future = executor.submit(agent.process_next_ticket, safe_callback)
+                            active_futures[future] = agent
+
+                # 3. If no agent is working, check if we're done or deadlocked
+                if not active_futures:
+                    with self._lock:
+                        has_queued = any(a.queue_size > 0 for a in self.agents)
+                        if not has_queued and not self.pending_backlog:
+                            break  # All tickets processed
+                        if self.pending_backlog and not has_queued:
+                            # Deadlock guard: no running tasks, no queued tickets, but backlog remains
+                            for t in list(self.pending_backlog):
+                                self._block(t, "Dependencies can never be satisfied", "DEPENDENCY_FAILED")
+                            break
+
+                # 4. Wait for at least one future to finish
+                done, _ = concurrent.futures.wait(
+                    list(active_futures.keys()),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for future in done:
+                    agent = active_futures.pop(future, None)
+                    try:
+                        completed = future.result()
+                    except Exception as exc:
+                        logger.exception("Agent [%s] failed with unexpected exception: %s",
+                                         agent.agent_id if agent else "unknown", exc)
+                        completed = None
+
+                    if completed:
+                        with self._lock:
+                            resolved_tickets.append(completed)
+                            if self.auto_qa and completed.status == TicketStatus.RESOLVED:
+                                self._create_qa_verification_ticket(completed)
+
+                # 5. Dispatch newly unlocked backlog tickets
+                with self._lock:
+                    self.dispatch_all_pending()
+
+        self.run_logger.finalize(self.get_summary())
+        return resolved_tickets
+
+    def process_all_tickets(
+        self,
+        parallel: bool | None = None,
+        on_step_callback: Callable[[Ticket], None] | None = None
+    ) -> list[Ticket]:
+        """
+        Execute all tickets across the agent fleet.
+        Runs in parallel by default (or if configured in .env / arguments),
+        or falls back to synchronous execution when parallel is False.
+        """
+        run_parallel = self.parallel if parallel is None else bool(parallel)
+        if run_parallel and self.max_agents > 1:
+            return self.process_all_tickets_parallel(on_step_callback=on_step_callback)
+        return self.process_all_tickets_synchronously(on_step_callback=on_step_callback)
 
     def load_manifest(self, manifest_data: list[dict[str, Any]] | dict[str, Any]) -> list[Ticket]:
         """

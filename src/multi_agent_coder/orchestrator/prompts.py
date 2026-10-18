@@ -40,10 +40,10 @@ def build_worker_system_instruction(
             "- Deliverable: Atomic, tested code patches with preserved comments and style conventions."
         ),
         "testing": (
-            "- Primary Goal: Automated test writing, verification, and regression prevention.\n"
-            "- Tools: Use `read_file`, `create_file`, `replace_file_content`, and `run_command` (pytest).\n"
-            "- Safety Constraint: Tests must be deterministic, isolated, and executable via `pytest`.\n"
-            "- Deliverable: Robust pytest suites with high edge-case coverage and passing verification logs."
+            "- Primary Goal: Comprehensive QA test execution, validation of code changes, and regression prevention.\n"
+            "- Tools: Use `read_file`, `git_status`, `git_diff`, `check_syntax`, and `run_command` (pytest, npm test, node <test_file>).\n"
+            "- Safety Constraint: You are the Nth agent (dedicated Tester). Thoroughly verify worker code patches.\n"
+            "- Deliverable: Detailed QA verification report confirming syntax validity, passing test suites, and 0 regressions."
         ),
         "refactor": (
             "- Primary Goal: Code cleanup, performance optimization, and modularization.\n"

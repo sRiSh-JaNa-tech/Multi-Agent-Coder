@@ -45,6 +45,22 @@ def first_env(*names: str, default: str | None = None) -> str | None:
     return default
 
 
+def parse_bool(raw: str | bool | None, default: bool = True) -> bool:
+    """Parse a boolean flag from string, bool, or environment variable."""
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw).strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
 def parse_token_limit(raw: str | int | None) -> int | None:
     """
     Parse a token limit. ``None``-like values and non-positive integers mean unlimited.
@@ -124,6 +140,8 @@ class SwarmConfig:
     token_usage_limit: int | None = None
     log_dir: Path = field(default_factory=lambda: SWARM_REPO_ROOT / "logs" / "swarm")
     agent_names: list[str] = field(default_factory=list)
+    parallel: bool = True
+    auto_qa: bool = True
 
     @property
     def token_limit_label(self) -> str:
@@ -144,9 +162,14 @@ class SwarmConfig:
         else:
             log_dir = SWARM_REPO_ROOT / "logs" / "swarm"
 
+        parallel = parse_bool(first_env("SWARM_PARALLEL", "PARALLEL_EXECUTION"), default=True)
+        auto_qa = parse_bool(first_env("AUTO_QA_TESTER", "AUTO_QA"), default=True)
+
         return cls(
             model_name=model,
             token_usage_limit=limit,
             log_dir=log_dir.resolve(),
             agent_names=parse_agent_names(first_env("AGENT_NAMES")),
+            parallel=parallel,
+            auto_qa=auto_qa,
         )

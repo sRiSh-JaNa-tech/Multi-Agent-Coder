@@ -121,11 +121,13 @@ class AgentWorker:
         token_budget: TokenBudget | None = None,
         run_logger: Any | None = None,
         allow_git_write: bool | None = None,
+        is_tester: bool = False,
     ) -> None:
         self.agent_id = agent_id
         self.role = role
         self.specialty = specialty
         self.queue_limit = queue_limit
+        self.is_tester = is_tester
         self.model = model or first_env("MODEL_NAME", "GEMINI_MODEL") or DEFAULT_MODEL
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd()

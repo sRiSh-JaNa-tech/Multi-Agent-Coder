@@ -87,6 +87,24 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Total token budget for the run: an integer, or 'none' for unlimited "
              "(defaults to TOKEN_USAGE_LIMIT from .env).",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        default=None,
+        help="Run worker agents in parallel using multi-threaded execution (default: true).",
+    )
+    parser.add_argument(
+        "--sequential",
+        action="store_true",
+        default=False,
+        help="Force worker agents to execute tickets sequentially one by one.",
+    )
+    parser.add_argument(
+        "--no-auto-qa",
+        action="store_true",
+        default=False,
+        help="Disable automatic QA verification ticket generation for the Nth tester agent.",
+    )
     return parser.parse_args(args)
 
 
@@ -102,12 +120,18 @@ def main(cli_args: list[str] | None = None) -> None:
     extra = {}
     if args.token_limit is not None:
         extra["token_limit"] = args.token_limit
+
+    is_parallel = False if args.sequential else (True if args.parallel else None)
+    auto_qa = False if args.no_auto_qa else None
+
     try:
         orchestrator = MainOrchestrator(
             api_key=api_key,
             queue_limit_per_agent=args.queue_limit,
             max_agents=args.max_agents,
             workspace_root=args.workspace,
+            parallel=is_parallel,
+            auto_qa=auto_qa,
             **extra,
         )
     except ValueError as exc:  # ConfigError subclasses ValueError
@@ -185,14 +209,15 @@ def main(cli_args: list[str] | None = None) -> None:
 
     if not args.headless:
         dashboard.render_state(orchestrator.agents, orchestrator.all_tickets, orchestrator.pending_backlog)
-        console.print("[bold yellow]Step 3: Agents executing tickets synchronously one by one...[/bold yellow]\n")
+        exec_mode = "in parallel across worker agents" if orchestrator.parallel else "synchronously one by one"
+        console.print(f"[bold yellow]Step 3: Agents executing tickets {exec_mode}...[/bold yellow]\n")
 
     def on_step(t):
         if not args.headless:
             dashboard.render_state(orchestrator.agents, orchestrator.all_tickets, orchestrator.pending_backlog)
             time.sleep(0.3)
 
-    resolved = orchestrator.process_all_tickets_synchronously(on_step_callback=on_step)
+    resolved = orchestrator.process_all_tickets(on_step_callback=on_step)
 
     # 4. Final summary output
     summary = orchestrator.get_summary()
