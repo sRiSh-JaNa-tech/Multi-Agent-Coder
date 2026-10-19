@@ -26,6 +26,30 @@ class TicketStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+@dataclass
+class FileModificationTicket:
+    """Represents an atomic file I/O request queued by an agent for serialized execution."""
+    filepath: str
+    operation: str = "write"  # "write", "create", "patch", "replace", "append", "delete"
+    content: str | None = None
+    search_block: str | None = None
+    replace_block: str | None = None
+    ticket_id: str = ""
+    agent_id: str = "unknown"
+    status: str = "PENDING"  # PENDING, APPLIED, FAILED, CONFLICT
+    error: str | None = None
+    created_at: float = field(default_factory=time.time)
+    applied_at: float | None = None
+
+    def mark_applied(self) -> None:
+        self.status = "APPLIED"
+        self.applied_at = time.time()
+
+    def mark_failed(self, err: str) -> None:
+        self.status = "FAILED"
+        self.error = err
+        self.applied_at = time.time()
+
 
 @dataclass
 class Ticket:

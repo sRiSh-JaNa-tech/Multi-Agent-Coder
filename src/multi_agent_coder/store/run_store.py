@@ -4,11 +4,12 @@ SQLite-backed persistence for swarm execution runs, ticket checkpoints,
 discovered findings, and agent actions.
 """
 
-from __future__ import annotations
-
+from contextlib import contextmanager
+import copy
 import json
 from pathlib import Path
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -17,10 +18,16 @@ from ..common.logging_config import setup_logging
 logger = setup_logging(__name__)
 
 
+class ConcurrencyError(Exception):
+    """Raised when an optimistic concurrency version check fails due to concurrent mutation."""
+    pass
+
+
 class RunStateStore:
-    """Thread-safe SQLite store for runs, tickets, and findings."""
+    """Thread-safe SQLite store for runs, tickets, and findings with optimistic concurrency."""
 
     def __init__(self, db_path: Path | str | None = None) -> None:
+        self._lock = threading.RLock()
         if db_path is None:
             state_dir = Path.cwd() / ".multi_agent_coder"
             state_dir.mkdir(parents=True, exist_ok=True)
@@ -31,13 +38,18 @@ class RunStateStore:
 
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+    @contextmanager
+    def _get_connection(self):
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id TEXT PRIMARY KEY,
@@ -47,7 +59,8 @@ class RunStateStore:
                     max_agents INTEGER,
                     created_at REAL,
                     completed_at REAL,
-                    summary_json TEXT
+                    summary_json TEXT,
+                    version INTEGER DEFAULT 1
                 );
 
                 CREATE TABLE IF NOT EXISTS tickets (
@@ -66,6 +79,7 @@ class RunStateStore:
                     tokens_used INTEGER DEFAULT 0,
                     verified INTEGER DEFAULT 0,
                     updated_at REAL,
+                    version INTEGER DEFAULT 1,
                     FOREIGN KEY (run_id) REFERENCES runs (run_id)
                 );
 
@@ -86,37 +100,108 @@ class RunStateStore:
                 CREATE INDEX IF NOT EXISTS idx_tickets_run ON tickets(run_id);
                 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id);
             """)
+            try:
+                conn.execute("ALTER TABLE runs ADD COLUMN version INTEGER DEFAULT 1")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE tickets ADD COLUMN version INTEGER DEFAULT 1")
+            except sqlite3.OperationalError:
+                pass
 
     def record_run_start(
         self,
         run_id: str,
         objective: str,
-        workspace_root: str,
+        workspace_root: str = "",
         max_agents: int = 3,
-    ) -> None:
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
         now = time.time()
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO runs (run_id, objective, status, workspace_root, max_agents, created_at)
-                VALUES (?, ?, 'RUNNING', ?, ?, ?)
+                INSERT OR REPLACE INTO runs (run_id, objective, status, workspace_root, max_agents, created_at, version)
+                VALUES (?, ?, 'RUNNING', ?, ?, ?, 1)
                 """,
                 (run_id, objective, str(workspace_root), max_agents, now),
             )
+            return 1
 
-    def record_run_finish(self, run_id: str, status: str, summary: dict[str, Any]) -> None:
+    def update_run_state(
+        self,
+        run_id: str,
+        status: str | None = None,
+        summary: dict[str, Any] | None = None,
+        expected_version: int | None = None,
+        state: dict[str, Any] | None = None,
+    ) -> int:
+        """Update run status or summary with optimistic concurrency check."""
         now = time.time()
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute("SELECT version, status, summary_json FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            if not row:
+                raise ValueError(f"Run {run_id} not found in state store.")
+            current_version = row["version"] or 1
+            if expected_version is not None and current_version != expected_version:
+                raise ConcurrencyError(
+                    f"Run {run_id} optimistic concurrency version collision: expected version {expected_version}, found {current_version}"
+                )
+            new_version = current_version + 1
+            if state is not None:
+                if status is None:
+                    status = state.get("status")
+                if summary is None:
+                    summary = state
+            new_status = status if status is not None else row["status"]
+            new_summary = json.dumps(summary) if summary is not None else row["summary_json"]
+
             conn.execute(
                 """
                 UPDATE runs
-                SET status = ?, completed_at = ?, summary_json = ?
+                SET status = ?, summary_json = ?, version = ?, completed_at = ?
                 WHERE run_id = ?
                 """,
-                (status, now, json.dumps(summary), run_id),
+                (new_status, new_summary, new_version, now, run_id),
             )
+            return new_version
 
-    def save_ticket_checkpoint(self, run_id: str, ticket: Any) -> None:
+    def record_run_finish(
+        self,
+        run_id: str,
+        status: str,
+        summary: dict[str, Any],
+        expected_version: int | None = None,
+    ) -> int:
+        now = time.time()
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute("SELECT version FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row:
+                current_version = row["version"] or 1
+                if expected_version is not None and current_version != expected_version:
+                    raise ConcurrencyError(
+                        f"Run {run_id} optimistic concurrency violation: expected version {expected_version}, found {current_version}"
+                    )
+                new_version = current_version + 1
+            else:
+                new_version = 1
+
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, completed_at = ?, summary_json = ?, version = ?
+                WHERE run_id = ?
+                """,
+                (status, now, json.dumps(summary), new_version, run_id),
+            )
+            return new_version
+
+    def save_ticket_checkpoint(
+        self,
+        run_id: str,
+        ticket: Any,
+        expected_version: int | None = None,
+    ) -> int:
         now = time.time()
         if isinstance(ticket, dict):
             ticket_id = str(ticket.get("id", ""))
@@ -149,14 +234,25 @@ class RunStateStore:
 
         status_val = status.value if hasattr(status, "value") else str(status)
 
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute("SELECT version FROM tickets WHERE ticket_id = ?", (ticket_id,)).fetchone()
+            if row:
+                current_version = row["version"] or 1
+                if expected_version is not None and current_version != expected_version:
+                    raise ConcurrencyError(
+                        f"Ticket {ticket_id} optimistic concurrency violation: expected version {expected_version}, found {current_version}"
+                    )
+                new_version = current_version + 1
+            else:
+                new_version = 1
+
             conn.execute(
                 """
                 INSERT OR REPLACE INTO tickets (
                     ticket_id, run_id, title, description, category, status,
                     assigned_agent_id, depends_on_json, result, error, failure_code,
-                    tool_calls, tokens_used, verified, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tool_calls, tokens_used, verified, updated_at, version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket_id,
@@ -174,8 +270,10 @@ class RunStateStore:
                     tokens,
                     verified,
                     now,
+                    new_version,
                 ),
             )
+            return new_version
 
     def record_finding(self, run_id: str, finding: Any) -> None:
         if isinstance(finding, dict):
@@ -199,7 +297,7 @@ class RunStateStore:
         conf_val = conf.value if hasattr(conf, "value") else str(conf)
         sev_val = sev.value if hasattr(sev, "value") else str(sev)
 
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO findings (
@@ -210,7 +308,7 @@ class RunStateStore:
             )
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
             if not row:
                 return None
@@ -218,12 +316,13 @@ class RunStateStore:
             if res.get("summary_json"):
                 try:
                     res["summary"] = json.loads(res["summary_json"])
+                    res["state"] = res["summary"]
                 except Exception:
                     pass
-            return res
+            return copy.deepcopy(res)
 
     def get_run_tickets(self, run_id: str) -> list[dict[str, Any]]:
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             rows = conn.execute("SELECT * FROM tickets WHERE run_id = ?", (run_id,)).fetchall()
             tickets = []
             for r in rows:
@@ -234,4 +333,18 @@ class RunStateStore:
                     except Exception:
                         t["depends_on"] = []
                 tickets.append(t)
-            return tickets
+            return copy.deepcopy(tickets)
+
+    def get_ticket(self, ticket_id: str) -> dict[str, Any] | None:
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM tickets WHERE ticket_id = ?", (ticket_id,)).fetchone()
+            if not row:
+                return None
+            t = dict(row)
+            if t.get("depends_on_json"):
+                try:
+                    t["depends_on"] = json.loads(t["depends_on_json"])
+                except Exception:
+                    t["depends_on"] = []
+            return copy.deepcopy(t)
+

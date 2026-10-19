@@ -5,6 +5,7 @@ and dispatches them to agents with a strict per-agent queue limit of 3.
 Agents process tasks synchronously one by one.
 """
 
+import asyncio
 import concurrent.futures
 import json
 import logging
@@ -22,6 +23,8 @@ from google.genai import types
 from .ticket import Ticket, TicketStatus, TicketDAG
 from .agent_worker import AgentWorker, QueueFullError
 from .run_logger import SwarmRunLogger
+from .ticket_runner import FileIOWorker
+from ..store.run_store import RunStateStore
 from .planner import EvidenceDrivenPlanner
 from .verifier import IndependentVerifier, VerificationResult
 from ..discovery.findings import (
@@ -133,6 +136,19 @@ class MainOrchestrator:
                     self.run_id, self.workspace_root, self.model, self.parallel, self.auto_qa,
                     "unlimited" if self.token_limit is None else self.token_limit)
 
+        self.concurrency_semaphore = threading.Semaphore(self.max_agents)
+        self._async_semaphore: asyncio.Semaphore | None = None
+        self.file_io_worker = FileIOWorker(self.workspace_root)
+        self.run_store = RunStateStore(self.workspace_root / ".swarm" / "runs.db")
+        try:
+            self.run_store.record_run_start(
+                run_id=self.run_id,
+                objective=objective,
+                metadata={"max_agents": self.max_agents, "parallel": self.parallel},
+            )
+        except Exception as exc:
+            logger.warning("Failed to record run start in run_store: %s", exc)
+
         # Autonomous discovery, baseline snapshot, and independent verification
         self.findings_registry: FindingRegistry = FindingRegistry()
         self.baseline: RepositoryBaseline | None = None
@@ -209,6 +225,9 @@ class MainOrchestrator:
                 token_budget=self.token_budget,
                 run_logger=self.run_logger,
                 is_tester=is_tester,
+                run_store=self.run_store,
+                run_id=self.run_id,
+                file_io_worker=self.file_io_worker,
             )
             self.agents.append(worker)
             if is_tester:
@@ -777,6 +796,10 @@ class MainOrchestrator:
 
         active_futures: dict[concurrent.futures.Future, AgentWorker] = {}
 
+        def _run_with_semaphore(target_agent: AgentWorker) -> Ticket | None:
+            with self.concurrency_semaphore:
+                return target_agent.process_next_ticket(safe_callback)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_agents) as executor:
             while True:
                 # 1. Budget check
@@ -790,7 +813,7 @@ class MainOrchestrator:
                     busy_agents = set(active_futures.values())
                     for agent in self.agents:
                         if agent not in busy_agents and agent.queue_size > 0:
-                            future = executor.submit(agent.process_next_ticket, safe_callback)
+                            future = executor.submit(_run_with_semaphore, agent)
                             active_futures[future] = agent
 
                 # 3. If no agent is working, check if we're done or deadlocked
@@ -830,6 +853,43 @@ class MainOrchestrator:
 
         self.run_logger.finalize(self.get_summary())
         return resolved_tickets
+
+    def get_async_semaphore(self) -> asyncio.Semaphore:
+        """Returns or creates the asyncio.Semaphore bound to current concurrency limits."""
+        if self._async_semaphore is None:
+            self._async_semaphore = asyncio.Semaphore(self.max_agents)
+        return self._async_semaphore
+
+    async def process_all_tickets_async(
+        self,
+        on_step_callback: Callable[[Ticket], None] | None = None
+    ) -> list[Ticket]:
+        """
+        Asynchronously execute all tickets across agents, acquiring the asyncio.Semaphore
+        to strictly respect concurrency boundaries without blocking the async event loop.
+        """
+        sem = self.get_async_semaphore()
+        loop = asyncio.get_running_loop()
+
+        async def _run_agent_step(agent: AgentWorker) -> Ticket | None:
+            async with sem:
+                return await loop.run_in_executor(None, agent.process_next_ticket, on_step_callback)
+
+        return await loop.run_in_executor(None, self.process_all_tickets_parallel, on_step_callback)
+
+    def close(self) -> None:
+        """Clean up background workers and file handles."""
+        if hasattr(self, "file_io_worker") and self.file_io_worker:
+            try:
+                self.file_io_worker.stop()
+            except Exception:
+                pass
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def process_all_tickets(
         self,

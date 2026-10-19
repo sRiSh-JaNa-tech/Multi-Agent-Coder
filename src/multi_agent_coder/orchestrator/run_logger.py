@@ -16,6 +16,9 @@ orchestrator (e.g. in tests) leaves nothing on disk.
 from __future__ import annotations
 
 import json
+import logging
+from logging.handlers import QueueHandler, QueueListener
+import queue
 import threading
 import time
 import uuid
@@ -75,6 +78,28 @@ class SwarmRunLogger:
         self._warned = False
         self._started_event_written = False
 
+        # Thread-safe log queue and listener to prevent output interleaving
+        self._log_queue: queue.Queue = queue.Queue()
+        self._queue_handler = QueueHandler(self._log_queue)
+        self._listener: QueueListener | None = None
+
+    def _ensure_listener(self) -> None:
+        if self._listener is not None:
+            return
+        with self._lock:
+            if self._listener is not None:
+                return
+            try:
+                self.run_dir.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.FileHandler(str(self.run_log_path), encoding="utf-8")
+                file_handler.setFormatter(logging.Formatter("%(message)s"))
+                self._listener = QueueListener(self._log_queue, file_handler, respect_handler_level=True)
+                self._listener.start()
+            except OSError as exc:
+                if not self._warned:
+                    self._warned = True
+                    logger.warning("Swarm run.log unavailable (%s): %s", self.run_log_path, exc)
+
     # ------------------------------------------------------------------ core
     def _write_line(self, path: Path, record: dict[str, Any]) -> None:
         try:
@@ -88,14 +113,22 @@ class SwarmRunLogger:
 
     def _write_run_log(self, text: str) -> None:
         try:
-            self.run_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_listener()
             ts = _now_iso()
-            with self._lock, open(self.run_log_path, "a", encoding="utf-8") as fh:
-                fh.write(f"[{ts}] {text}\n")
-        except OSError as exc:
+            record = logging.LogRecord(
+                name=f"swarm.run.{self.run_id}",
+                level=logging.INFO,
+                pathname=__file__,
+                lineno=0,
+                msg=f"[{ts}] {text}",
+                args=(),
+                exc_info=None,
+            )
+            self._queue_handler.emit(record)
+        except Exception as exc:
             if not self._warned:
                 self._warned = True
-                logger.warning("Swarm run.log unavailable (%s): %s", self.run_log_path, exc)
+                logger.warning("Swarm run.log queue emission failed: %s", exc)
 
     def _format_event_log(self, event_type: str, fields: dict[str, Any]) -> str:
         if event_type == "run_started":
@@ -286,6 +319,12 @@ class SwarmRunLogger:
         self.event("run_finished", resolved=summary.get("resolved"), failed=summary.get("failed"),
                    blocked=summary.get("blocked"), total_tickets=summary.get("total_tickets"),
                    tokens_used=(summary.get("token_usage") or {}).get("used"))
+
+        if self._listener:
+            try:
+                self._listener.stop()
+            except Exception:
+                pass
         self._write_line(
             self.index_path,
             {

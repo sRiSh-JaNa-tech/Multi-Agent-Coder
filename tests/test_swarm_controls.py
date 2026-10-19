@@ -352,3 +352,68 @@ def test_mcp_server_tools_and_workspace():
     assert "swarm_get_run_log" in tool_names
     assert "swarm_get_worktree_diff" in tool_names
     assert "swarm_merge_worktree" in tool_names
+
+
+# -----------------------------------------------------------------------------
+# 10. Optimistic concurrency race condition & collision recovery
+# -----------------------------------------------------------------------------
+def test_run_store_optimistic_concurrency_race_condition(tmp_path: Path):
+    """
+    Intentionally causes a concurrent race condition in run_store.py,
+    proving that optimistic concurrency version checking catches the collision
+    with ConcurrencyError and successfully recovers when state is re-fetched.
+    """
+    from multi_agent_coder.store.run_store import RunStateStore, ConcurrencyError
+
+    db_path = tmp_path / "runs.db"
+    store = RunStateStore(db_path)
+
+    run_id = "run-race-test-01"
+    store.record_run_start(run_id=run_id, objective="Test Race Condition Handling")
+
+    # Step 1: Agent A and Agent B perform concurrent dirty reads of the current state
+    state_a = store.get_run(run_id)
+    state_b = store.get_run(run_id)
+
+    assert state_a is not None and state_b is not None
+    assert state_a["version"] == 1
+    assert state_b["version"] == 1
+
+    # Step 2: Agent A updates the run state first with expected_version=1
+    new_version_a = store.update_run_state(
+        run_id=run_id,
+        state={"status": "IN_PROGRESS", "active_agent": "Agent-A"},
+        expected_version=state_a["version"],
+    )
+    assert new_version_a == 2
+
+    # Step 3: Agent B attempts to update the run state with its stale expected_version=1
+    # Proves that the optimistic concurrency check catches the collision and raises ConcurrencyError!
+    with pytest.raises(ConcurrencyError) as exc_info:
+        store.update_run_state(
+            run_id=run_id,
+            state={"status": "IN_PROGRESS", "active_agent": "Agent-B"},
+            expected_version=state_b["version"],  # Stale version 1!
+        )
+    assert "version collision" in str(exc_info.value).lower()
+
+    # Step 4: Recovery: Agent B re-fetches the latest state, sees the current version, and reapplies
+    fresh_state_b = store.get_run(run_id)
+    assert fresh_state_b is not None
+    assert fresh_state_b["version"] == 2
+    assert fresh_state_b["state"]["active_agent"] == "Agent-A"
+
+    new_version_b = store.update_run_state(
+        run_id=run_id,
+        state={"status": "IN_PROGRESS", "active_agent": "Agent-B", "recovered": True},
+        expected_version=fresh_state_b["version"],
+    )
+    assert new_version_b == 3
+
+    # Step 5: Final state verification
+    final_run = store.get_run(run_id)
+    assert final_run is not None
+    assert final_run["version"] == 3
+    assert final_run["state"]["active_agent"] == "Agent-B"
+    assert final_run["state"]["recovered"] is True
+

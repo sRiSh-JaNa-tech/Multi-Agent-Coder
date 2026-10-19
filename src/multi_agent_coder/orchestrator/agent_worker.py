@@ -164,12 +164,18 @@ class AgentWorker:
         run_logger: Any | None = None,
         allow_git_write: bool | None = None,
         is_tester: bool = False,
+        run_store: Any | None = None,
+        run_id: str | None = None,
+        file_io_worker: Any | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.role = role
         self.specialty = specialty
         self.queue_limit = queue_limit
         self.is_tester = is_tester
+        self.run_store = run_store
+        self.run_id = run_id
+        self.file_io_worker = file_io_worker
         self.model = model or first_env("MODEL_NAME", "GEMINI_MODEL") or DEFAULT_MODEL
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd()
@@ -347,9 +353,9 @@ class AgentWorker:
             "git_log": lambda inp: execute_git_log(inp, workspace_root=root),
             # File tools are pinned to the target workspace: edits happen in place, never in a copy.
             "read_file": lambda inp: execute_read_file(None, inp, workspace_root=root),
-            "write_file": lambda inp: execute_write_file(inp, workspace_root=root, security_context=sec_ctx),
-            "replace_file_content": lambda inp: execute_replace_file_content(inp, workspace_root=root, security_context=sec_ctx),
-            "create_file": lambda inp: execute_create_file(inp, workspace_root=root, security_context=sec_ctx),
+            "write_file": lambda inp: execute_write_file(inp, workspace_root=root, security_context=sec_ctx, file_io_worker=self.file_io_worker),
+            "replace_file_content": lambda inp: execute_replace_file_content(inp, workspace_root=root, security_context=sec_ctx, file_io_worker=self.file_io_worker),
+            "create_file": lambda inp: execute_create_file(inp, workspace_root=root, security_context=sec_ctx, file_io_worker=self.file_io_worker),
             "list_directory": lambda inp: execute_list_directory(None, inp, workspace_root=root),
             "find_files": lambda inp: execute_find_files(None, inp, workspace_root=root),
             "grep": lambda inp: execute_grep(tool_input=inp, workspace_root=root),
@@ -565,6 +571,45 @@ class AgentWorker:
             "(raise MAX_WORKER_ITERATIONS or split the ticket into smaller tickets).",
         )
 
+    def _wait_for_parent_dependencies(self, ticket: Ticket, timeout: float = 10.0) -> None:
+        """
+        Strict DAG enforcement: safely poll run_store and block execution until
+        all parent nodes in the DAG have status == 'COMPLETED' (or 'RESOLVED').
+        """
+        if not ticket.depends_on:
+            return
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            all_done = True
+            if self.run_store and self.run_id:
+                try:
+                    tickets_in_run = {t.id: t for t in self.run_store.get_run_tickets(self.run_id)}
+                    if tickets_in_run:
+                        for dep_id in ticket.depends_on:
+                            dep_t = tickets_in_run.get(dep_id)
+                            if dep_t is None:
+                                continue
+                            dep_status = getattr(dep_t, "status", "")
+                            if hasattr(dep_status, "value"):
+                                dep_status = dep_status.value
+                            dep_status = str(dep_status).upper()
+                            if dep_status in ("FAILED", "BLOCKED", "CANCELLED"):
+                                raise AgentFailure("DEPENDENCY_FAILED", f"Parent ticket [{dep_id}] failed with status {dep_status}")
+                            if dep_status not in ("COMPLETED", "RESOLVED"):
+                                all_done = False
+                                break
+                except AgentFailure:
+                    raise
+                except Exception as exc:
+                    logger.warning("Error checking parent dependency in run_store: %s", exc)
+
+            if all_done:
+                return
+            time.sleep(0.05)
+
+        raise AgentFailure("DEPENDENCY_TIMEOUT", f"Timed out waiting for parent dependencies {ticket.depends_on} to complete")
+
     def process_next_ticket(self, callback: Callable[[Ticket], None] | None = None) -> Ticket | None:
         """
         Process the next ticket from the queue strictly synchronously.
@@ -585,6 +630,7 @@ class AgentWorker:
             self.run_logger.ticket_started(ticket, self.agent_id)
 
         try:
+            self._wait_for_parent_dependencies(ticket)
             result = self.execute_ticket_task(ticket)
             ticket.mark_resolved(result)
             if result:

@@ -126,3 +126,63 @@ def test_parallel_ticket_execution_concurrency(tmp_path: Path):
 
     overlap = min(t1_end, t2_end) - max(t1_start, t2_start)
     assert overlap > 0.05, f"Expected significant concurrency overlap, got {overlap:.3f}s"
+
+
+def test_ten_agents_concurrent_file_append_stress(tmp_path: Path):
+    """
+    Stress test that spawns 10 agents simultaneously attempting to append lines to the exact same file.
+    Asserts that the final file contains exactly 10 lines without any write collisions or data corruption,
+    proving that the FileIOWorker ticket queue serializes concurrent I/O safely.
+    """
+    import threading
+    from multi_agent_coder.orchestrator.ticket import FileModificationTicket
+    from multi_agent_coder.orchestrator.ticket_runner import FileIOWorker
+
+    shared_file = "shared_log.txt"
+    worker = FileIOWorker(tmp_path)
+
+    agent_count = 10
+    barrier = threading.Barrier(agent_count)
+    errors: list[Exception] = []
+
+    def agent_append(agent_idx: int) -> None:
+        try:
+            barrier.wait(timeout=5.0)
+            line_content = f"Log entry from agent {agent_idx:02d}\n"
+            ticket = FileModificationTicket(
+                filepath=shared_file,
+                operation="append",
+                content=line_content,
+                agent_id=f"Agent-{agent_idx}",
+            )
+            worker.submit(ticket, timeout=10.0)
+            if ticket.status == "FAILED":
+                raise RuntimeError(ticket.error or "Append ticket failed")
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=agent_append, args=(i,), name=f"StressAgent-{i}")
+        for i in range(1, agent_count + 1)
+    ]
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    worker.stop()
+
+    assert not errors, f"Errors occurred during concurrent append: {errors}"
+
+    target_path = tmp_path / shared_file
+    assert target_path.exists(), "Target file was not created"
+
+    lines = [l.strip() for l in target_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 10, f"Expected exactly 10 lines, but found {len(lines)}: {lines}"
+
+    # Verify all 10 unique agents contributed a distinct line
+    for i in range(1, 11):
+        expected_substring = f"agent {i:02d}"
+        assert any(expected_substring in line for line in lines), f"Missing entry for agent {i}"
+

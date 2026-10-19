@@ -6,7 +6,7 @@ from .files import FILE_TOOLS, execute_find_files, execute_list_directory, execu
 from .memory import MEMORY_TOOLS, execute_recall_memory, execute_save_memory
 from .repo import REPO_TOOLS, execute_clone_and_index, execute_list_repos, find_repo_path, normalize_collection_name
 from .search import SEARCH_TOOLS, execute_grep, execute_search_code
-from .coding import CODING_TOOLS, execute_create_file, execute_replace_file_content, execute_write_file
+from .coding import CODING_TOOLS, execute_create_file, execute_replace_file_content, execute_write_file, execute_append_file
 from .execution import (
     EXECUTION_TOOLS,
     GIT_TOOLS,

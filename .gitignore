@@ -249,3 +249,8 @@ filewiz/
 
 memory.json
 **/memory.json
+
+# Swarm local database & state
+.swarm/
+**/.swarm/
+

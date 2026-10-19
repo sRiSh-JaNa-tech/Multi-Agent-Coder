@@ -178,7 +178,50 @@ def _normalize_file_content(content: str) -> str:
     return content
 
 
-def execute_create_file(tool_input: dict[str, Any], workspace_root: Path | None = None, security_context: SecurityContext | None = None) -> str:
+def _submit_ticket_write(
+    workspace_root: Path,
+    filepath: str,
+    operation: str,
+    content: str | None = None,
+    search_block: str | None = None,
+    replace_block: str | None = None,
+    file_io_worker: Any | None = None,
+    agent_id: str = "unknown",
+) -> str | None:
+    """Helper to dispatch file write operations through FileIOWorker and FileModificationTicket."""
+    from ..orchestrator.ticket import FileModificationTicket
+    from ..orchestrator.ticket_runner import FileIOWorker
+
+    worker = file_io_worker
+    owns_worker = False
+    if worker is None:
+        worker = FileIOWorker(workspace_root)
+        owns_worker = True
+
+    ticket = FileModificationTicket(
+        filepath=filepath,
+        operation=operation,
+        content=content,
+        search_block=search_block,
+        replace_block=replace_block,
+        agent_id=agent_id,
+    )
+    try:
+        worker.submit(ticket)
+        if ticket.status == "FAILED":
+            return ticket.error or "File modification failed"
+        return None
+    finally:
+        if owns_worker:
+            worker.stop()
+
+
+def execute_create_file(
+    tool_input: dict[str, Any],
+    workspace_root: Path | None = None,
+    security_context: SecurityContext | None = None,
+    file_io_worker: Any | None = None,
+) -> str:
     root = _get_target_root(tool_input, workspace_root)
     filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
     raw_content = tool_input.get("content", "")
@@ -208,12 +251,26 @@ def execute_create_file(tool_input: dict[str, Any], workspace_root: Path | None 
                 f"Ensure valid Python code is provided without literal escape artifacts."
             )
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    worker = file_io_worker or getattr(security_context, "file_io_worker", None)
+    err = _submit_ticket_write(
+        root,
+        filepath=filepath,
+        operation="create",
+        content=content,
+        file_io_worker=worker,
+        agent_id=getattr(security_context, "agent_id", "unknown"),
+    )
+    if err:
+        return f"Error: {err}"
     return f"Successfully created {filepath} ({len(content.splitlines())} lines)"
 
 
-def execute_write_file(tool_input: dict[str, Any], workspace_root: Path | None = None, security_context: SecurityContext | None = None) -> str:
+def execute_write_file(
+    tool_input: dict[str, Any],
+    workspace_root: Path | None = None,
+    security_context: SecurityContext | None = None,
+    file_io_worker: Any | None = None,
+) -> str:
     root = _get_target_root(tool_input, workspace_root)
     filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
     raw_content = tool_input.get("content", "")
@@ -254,12 +311,26 @@ def execute_write_file(tool_input: dict[str, Any], workspace_root: Path | None =
                 f"Fix the syntax error or use replace_file_content for surgical edits."
             )
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    worker = file_io_worker or getattr(security_context, "file_io_worker", None)
+    err = _submit_ticket_write(
+        root,
+        filepath=filepath,
+        operation="write",
+        content=content,
+        file_io_worker=worker,
+        agent_id=getattr(security_context, "agent_id", "unknown"),
+    )
+    if err:
+        return f"Error: {err}"
     return f"Successfully updated {filepath} ({len(content.splitlines())} lines)"
 
 
-def execute_replace_file_content(tool_input: dict[str, Any], workspace_root: Path | None = None, security_context: SecurityContext | None = None) -> str:
+def execute_replace_file_content(
+    tool_input: dict[str, Any],
+    workspace_root: Path | None = None,
+    security_context: SecurityContext | None = None,
+    file_io_worker: Any | None = None,
+) -> str:
     root = _get_target_root(tool_input, workspace_root)
     filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
     target_content = tool_input.get("target_content") or tool_input.get("search_block") or ""
@@ -274,8 +345,48 @@ def execute_replace_file_content(tool_input: dict[str, Any], workspace_root: Pat
         security_context.assert_capability(AgentCapability.WORKSPACE_WRITE)
         security_context.assert_path_within_workspace(os.path.join(root, filepath))
 
-    try:
-        apply_search_replace(root, filepath, target_content, replacement_content)
-        return f"Successfully updated {filepath}"
-    except (PatchError, PermissionError, FileNotFoundError) as e:
-        return f"Error: {e}"
+    worker = file_io_worker or getattr(security_context, "file_io_worker", None)
+    err = _submit_ticket_write(
+        root,
+        filepath=filepath,
+        operation="replace",
+        search_block=target_content,
+        replace_block=replacement_content,
+        file_io_worker=worker,
+        agent_id=getattr(security_context, "agent_id", "unknown"),
+    )
+    if err:
+        return f"Error: {err}"
+    return f"Successfully updated {filepath}"
+
+
+def execute_append_file(
+    tool_input: dict[str, Any],
+    workspace_root: Path | None = None,
+    security_context: SecurityContext | None = None,
+    file_io_worker: Any | None = None,
+) -> str:
+    root = _get_target_root(tool_input, workspace_root)
+    filepath = (tool_input.get("filepath") or tool_input.get("file_path") or "").lstrip("/\\")
+    content = tool_input.get("content", "")
+
+    if not filepath:
+        return "Error: 'filepath' parameter is required."
+
+    if security_context:
+        security_context.assert_capability(AgentCapability.WORKSPACE_WRITE)
+        security_context.assert_path_within_workspace(os.path.join(root, filepath))
+
+    worker = file_io_worker or getattr(security_context, "file_io_worker", None)
+    err = _submit_ticket_write(
+        root,
+        filepath=filepath,
+        operation="append",
+        content=content,
+        file_io_worker=worker,
+        agent_id=getattr(security_context, "agent_id", "unknown"),
+    )
+    if err:
+        return f"Error: {err}"
+    return f"Successfully appended to {filepath}"
+
