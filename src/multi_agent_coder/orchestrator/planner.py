@@ -150,8 +150,10 @@ class EvidenceDrivenPlanner:
             for f in findings
         ]
 
-        prompt = f"""You are the Principal Multi-Agent Planning Architect.
-Synthesize the following objective and repository discovery findings into an actionable, dependency-aware task DAG.
+        findings_block = json.dumps(findings_summary, indent=2) if findings_summary else "None (General Objective / Problem-Solving Mode)"
+
+        prompt = f"""You are the Lead Multi-Agent Systems Architect.
+Synthesize the following objective and context into an actionable, progressive, dependency-aware task DAG.
 
 OBJECTIVE:
 {objective}
@@ -163,13 +165,20 @@ Baseline Test Status: {"PASSED" if baseline.test_baseline.success else "FAILED (
 Pre-existing Git changes: {baseline.pre_existing_git_changes or "None (Clean)"}
 
 DISCOVERY FINDINGS:
-{json.dumps(findings_summary, indent=2)}
+{findings_block}
 
-REQUIREMENTS:
-1. Every ticket must link to supporting finding_ids where applicable.
-2. Specify exact target_files to constrain worker modification scope.
-3. Every ticket must have clear acceptance_criteria and verification_commands.
-4. Set up dependencies: implementation tickets first, followed by QA and test verification.
+GUIDELINES FOR TASK DECOMPOSITION:
+1. If the objective is an open-ended goal (CTF, web exploration, data forensics, scripting, reverse engineering):
+   - Decompose into progressive milestones:
+     * Phase 1 (Reconnaissance / Investigation): Inspect files, services, extract strings, analyze headers.
+     * Phase 2 (Implementation / Solving): Write scripts, payloads, solvers, or modify code.
+     * Phase 3 (Verification & Extraction): Execute solution, verify flag or deliverable, test assertions.
+   - Use target_files: ["*"] if the agent needs flexibility to create helper scripts or outputs.
+   - For verification_commands: use shell commands, script runs, or pytest that prove progress.
+2. If the objective is defect fixing with findings:
+   - Link to finding_ids and constrain to target_files.
+3. Every ticket must have clear acceptance_criteria.
+4. Set up dependencies: prerequisites first, followed by dependent tasks.
 5. Limit plan to at most {max_tickets} high-value tickets.
 6. Output ONLY a valid JSON array of ticket objects.
 
@@ -179,10 +188,10 @@ Format:
     "title": "Clear action-oriented title",
     "description": "Specific requirements and implementation instructions",
     "category": "analysis" | "coding" | "testing" | "refactor" | "security" | "docs",
-    "finding_ids": ["FIND-..."],
-    "target_files": ["src/..."],
+    "finding_ids": [],
+    "target_files": ["*"],
     "acceptance_criteria": ["Criteria 1", "Criteria 2"],
-    "verification_commands": ["pytest ..."],
+    "verification_commands": [],
     "depends_on": [],
     "risk_level": "low" | "medium" | "high" | "critical",
     "priority": 1
@@ -425,3 +434,121 @@ Format:
             follow_ups.append(t)
 
         return self._validate_and_repair(follow_ups, baseline)
+
+    def plan_goal_follow_up(
+        self,
+        objective: str,
+        existing_tickets: list[Ticket],
+        baseline: RepositoryBaseline,
+        max_tickets: int = 3,
+    ) -> list[Ticket]:
+        """
+        Evaluate completed ticket outcomes, results, and failures against the overall objective.
+        If the objective is not yet complete or errors occurred, generate the next iterative tickets.
+        """
+        if not self.api_key or self.api_key.startswith("dummy"):
+            return []
+
+        if self.token_budget:
+            self.token_budget.check()
+
+        # Summarize tickets so far
+        history_summary = []
+        has_flag = False
+        flag_pattern = re.compile(r"(flag|FLAG|ctf|CTF)\{[^}]+\}")
+
+        for t in existing_tickets:
+            res_str = str(t.result or "")
+            if flag_pattern.search(res_str):
+                has_flag = True
+            history_summary.append({
+                "id": t.id,
+                "title": t.title,
+                "category": t.category,
+                "status": t.status.value if hasattr(t.status, "value") else str(t.status),
+                "error": (t.error or "")[:300],
+                "result_preview": res_str[:400],
+            })
+
+        # If a flag or complete solution was already found, no further follow-up needed
+        if has_flag:
+            logger.info("Flag or goal solution detected in ticket results. Concluding goal loop.")
+            return []
+
+        prompt = f"""You are the Lead Autonomous Systems Architect supervising a fleet of agents.
+Review the overall objective and the ticket execution history to decide if follow-up tickets are needed.
+
+OVERALL OBJECTIVE:
+{objective}
+
+PREVIOUS TICKETS & OUTCOMES:
+{json.dumps(history_summary, indent=2)}
+
+INSTRUCTIONS:
+1. Assess if the OVERALL OBJECTIVE has already been fully accomplished.
+   - If YES, output an empty JSON array: []
+2. If the objective is NOT yet accomplished, or if a previous ticket failed or revealed new information:
+   - Formulate the next 1 to {max_tickets} concrete follow-up tickets to solve or progress the objective.
+   - Depend on prerequisite ticket IDs where appropriate.
+   - Set category appropriately: "analysis", "coding", "testing", etc.
+   - Use target_files: ["*"] if not restricted to specific existing files.
+3. Output ONLY a valid JSON array of ticket objects.
+
+Format:
+[
+  {{
+    "title": "Clear action title",
+    "description": "Specific action instructions incorporating prior findings/errors",
+    "category": "analysis" | "coding" | "testing",
+    "finding_ids": [],
+    "target_files": ["*"],
+    "acceptance_criteria": ["Criteria 1"],
+    "verification_commands": [],
+    "depends_on": [],
+    "risk_level": "low" | "medium" | "high",
+    "priority": 1
+  }}
+]"""
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction="You are a Chief Software Systems Architect. Output valid JSON array only."
+                ),
+            )
+            if self.token_budget:
+                _, _, tot = usage_from_response(response)
+                self.token_budget.record(tot)
+
+            text = (response.text or "").strip()
+            match = re.search(r"\[.*\]", text, re.DOTALL)
+            if not match:
+                return []
+
+            raw_list = json.loads(match.group(0))
+            if not raw_list:
+                return []
+
+            follow_ups: list[Ticket] = []
+            for item in raw_list:
+                ticket = Ticket.create(
+                    title=item.get("title", "Follow-up Ticket"),
+                    description=item.get("description", ""),
+                    category=item.get("category", "coding"),
+                    depends_on=item.get("depends_on", []),
+                    finding_ids=item.get("finding_ids", []),
+                    target_files=item.get("target_files", ["*"]),
+                    acceptance_criteria=item.get("acceptance_criteria", []),
+                    verification_commands=item.get("verification_commands", []),
+                    risk_level=item.get("risk_level", "medium"),
+                    priority=int(item.get("priority", 1)),
+                    expected_deliverables=item.get("expected_deliverables", []),
+                )
+                follow_ups.append(ticket)
+
+            return self._validate_and_repair(follow_ups, baseline)
+        except Exception as exc:
+            logger.warning("Goal-seeking follow-up planning failed: %s", exc)
+            return []

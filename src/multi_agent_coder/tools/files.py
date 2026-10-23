@@ -36,6 +36,16 @@ FILE_TOOLS = [
                     "type": "string",
                     "description": "Path to file relative to the workspace root (e.g., 'src/app.js')",
                 },
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-based first line to return (default: 1). Use to inspect later sections of large files.",
+                    "default": 1,
+                },
+                "line_count": {
+                    "type": "integer",
+                    "description": "Maximum lines to return (default: 1000; maximum: 5000).",
+                    "default": 1000,
+                },
             },
             "required": ["filepath"],
         },
@@ -150,15 +160,17 @@ def execute_read_file(
     except Exception as e:
         return f"Error reading file: {e}"
 
-    # Add line numbers, truncate large files to avoid context explosion
+    # Support paging so agents can inspect large source and challenge artifacts in full.
     lines = content.split("\n")
-    max_lines = 300
-    truncated = len(lines) > max_lines
-    display_lines = lines[:max_lines]
-    numbered = [f"{i + 1:4d} | {line}" for i, line in enumerate(display_lines)]
-    result = f"File: {filepath} ({len(lines)} lines)\n\n" + "\n".join(numbered)
-    if truncated:
-        result += f"\n\n... truncated ({len(lines) - max_lines} lines remaining)"
+    start_line = max(1, int(tool_input.get("start_line", 1)))
+    line_count = min(5000, max(1, int(tool_input.get("line_count", 1000))))
+    start_idx = min(start_line - 1, len(lines))
+    end_idx = min(len(lines), start_idx + line_count)
+    display_lines = lines[start_idx:end_idx]
+    numbered = [f"{i + start_idx + 1:4d} | {line}" for i, line in enumerate(display_lines)]
+    result = f"File: {filepath} (lines {start_idx + 1}-{end_idx} of {len(lines)})\n\n" + "\n".join(numbered)
+    if end_idx < len(lines):
+        result += f"\n\n... {len(lines) - end_idx} lines remain; call read_file with start_line={end_idx + 1}."
     return result
 
 

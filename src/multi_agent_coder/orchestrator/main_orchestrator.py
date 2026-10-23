@@ -413,12 +413,6 @@ class MainOrchestrator:
                     f for f in self.findings_registry.list_all()
                     if f.id not in resolved_fids and (f.confidence == FindingConfidence.CONFIRMED or f.severity in (FindingSeverity.CRITICAL, FindingSeverity.HIGH))
                 ]
-                if not unresolved and not agg_res.regressions:
-                    if all_resolved and all_verified and agg_res.success:
-                        self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
-                    else:
-                        self.final_status = AutonomousRunState.INCOMPLETE.value
-                    break
 
                 planner = EvidenceDrivenPlanner(
                     self.workspace_root,
@@ -427,13 +421,28 @@ class MainOrchestrator:
                     client=self._client,
                     token_budget=self.token_budget,
                 )
-                follow_ups = planner.plan_follow_up(
-                    objective=objective,
-                    unresolved_findings=unresolved,
-                    baseline=self.baseline,
-                    existing_tickets=self.all_tickets,
-                )
+                follow_ups: list[Ticket] = []
+                if unresolved or agg_res.regressions:
+                    follow_ups = planner.plan_follow_up(
+                        objective=objective,
+                        unresolved_findings=unresolved,
+                        baseline=self.baseline,
+                        existing_tickets=self.all_tickets,
+                    )
+
+                # If no AST/finding follow-ups, evaluate overall objective via goal planner
                 if not follow_ups:
+                    follow_ups = planner.plan_goal_follow_up(
+                        objective=objective,
+                        existing_tickets=self.all_tickets,
+                        baseline=self.baseline,
+                    )
+
+                if not follow_ups:
+                    if all_resolved and all_verified and agg_res.success:
+                        self.final_status = AutonomousRunState.VERIFIED_COMPLETE.value
+                        logger.info("Autonomous Loop reached VERIFIED_COMPLETE (All tickets resolved, no further follow-up required).")
+                        break
                     consecutive_no_progress += 1
                     if consecutive_no_progress >= 2:
                         logger.info("No further follow-up tickets possible; stopping loop.")

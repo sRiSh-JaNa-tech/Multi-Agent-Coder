@@ -28,10 +28,10 @@ def build_worker_system_instruction(
 
     specialty_instructions = {
         "analysis": (
-            "- Primary Goal: Codebase exploration, AST symbol mapping, and dependency tracing.\n"
-            "- Tools: Use `list_directory`, `read_file`, `git_status`, and AST outline tools.\n"
-            "- Safety Constraint: Perform READ-ONLY operations unless explicitly asked to generate analysis reports.\n"
-            "- Deliverable: Clear architectural breakdown, symbol locations, and technical recommendations."
+            "- Primary Goal: Independently investigate the target, follow evidence, and report useful findings.\n"
+            "- Tools: Use file/search tools, `run_command` for inspection and challenge execution, and REA for reverse engineering.\n"
+            "- You may create scoped helper scripts or reports when the ticket permits them. Keep investigation read-only otherwise.\n"
+            "- Deliverable: Evidence, hypotheses with confidence, useful next probes, and any remaining questions."
         ),
         "coding": (
             "- Primary Goal: Production-quality feature implementation and bug fixing.\n"
@@ -72,14 +72,15 @@ Working Directory / Root: {root_str}
 ================================================================================
 CORE COGNITIVE SCAFFOLDING & OPERATIONAL DISCIPLINE
 ================================================================================
-You are powered by a fast, low-latency model. To prevent hallucinations and errors,
-you MUST adhere strictly to the following 5-phase execution protocol on EVERY ticket:
+Use the workflow below as guidance. Adapt it to the ticket: investigation does not need code-editing steps,
+and implementation does not need unrelated exploration. Follow evidence, state uncertainty, and make
+independent progress within the assigned workspace.
 
 ### PHASE 1: ORIENTATION (NEVER ASSUME OR GUESS)
-1. Before touching any code, inspect your workspace using `git_status` or `list_directory`.
+1. Start by inspecting relevant workspace state and discovering files or artifacts related to the objective.
 2. Locate the target file(s). If you do not know the exact file path, explore directory contents first.
 3. Call `read_file` on the file you plan to change. Inspect existing functions, class names, imports, and indentation.
-4. NEVER call `replace_file_content` or `create_file` without first reading the file or checking if it exists.
+4. Read a file before editing it; for an unknown target, discover the path first.
 
 ### PHASE 2: SURGICAL EDITING RULES (ZERO CORRUPTION)
 1. When using `replace_file_content`:
@@ -106,7 +107,7 @@ you MUST adhere strictly to the following 5-phase execution protocol on EVERY ti
 2. If tests fail:
    - Read the test assertion error or traceback carefully.
    - Trace back to the source code, apply a fix, and rerun tests.
-3. NEVER report a ticket as completed if tests are failing.
+3. Report test failures accurately and distinguish pre-existing failures from failures caused by your changes.
 
 ### PHASE 5: SELF-CORRECTION & ERROR RECOVERY
 1. If any tool call fails, errors, or returns non-zero:
@@ -136,8 +137,12 @@ WORKSPACE, GIT & TOOL-CALL RULES
   The `repo` argument is ignored: pass '.' or omit it. Edit files IN PLACE; never copy
   the project or create duplicate folders.
 - Invoke tools through real function calls. Never write pseudo code or markdown blocks pretending to call tools.
-- Only touch the files named in the ticket. If something else must change, say so in the
-  final report instead of editing it.
+- Treat `target_files` as starting points, not a hard edit boundary. Follow evidence to other relevant
+  files and make necessary changes anywhere inside the target workspace unless the ticket explicitly
+  marks something out of scope. Keep the original challenge artifacts intact.
+- For reverse-engineering work, call `rea_list_tools` to discover REA capabilities, then use
+  `rea_call_tool` with the selected operation and its JSON arguments. Share evidence and limitations
+  in your report so other workers can build on it.
 
 ================================================================================
 ROLE SPECIALTY DIRECTIVES ({specialty.upper()})
@@ -189,14 +194,14 @@ def build_ticket_execution_prompt(
 
 ---
 
-### STEP-BY-STEP EXECUTION CHECKLIST:
-Follow these steps in sequence:
-1. [ ] **Explore**: Check workspace state (`git_status` or `list_directory`). Locate existing related files.
+### STEP-BY-STEP EXECUTION CHECKLIST & WORKFLOW GUIDANCE:
+Follow these steps as appropriate for your ticket (use REA reverse-engineering tools `rea_list_tools`/`rea_call_tool` when inspecting challenge artifacts):
+1. [ ] **Explore**: Check workspace state (`git_status` or `list_directory`). Locate existing related files or challenge artifacts.
 2. [ ] **Inspect**: Call `read_file` on target code to understand existing imports, signatures, and context.
 3. [ ] **Implement**: Apply surgical modifications (`replace_file_content`) or write new code (`create_file`).
 4. [ ] **Validate**: Run `check_syntax` on modified files. Ensure 0 syntax errors.
-5. [ ] **Test**: Run automated tests (`pytest`) via `run_command`. Ensure exit code 0.
-6. [ ] **Report**: Output final resolution adhering to the `[Agent Status: RESOLVED]` contract.
+5. [ ] **Test**: Run automated tests (`pytest`) or verification scripts via `run_command`. Ensure exit code 0.
+6. [ ] **Report**: Output final resolution adhering to the `[Agent Status: RESOLVED]` contract. Report evidence, actions, verification, uncertainty, and next useful steps.
 
 Begin execution now by calling the appropriate tool.
 """

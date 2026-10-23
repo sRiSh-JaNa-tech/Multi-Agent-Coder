@@ -38,7 +38,8 @@ the typing. Do NOT write the target project's code yourself when the swarm can d
 - TARGET_WORKSPACE      default project directory edited in place.
 - MAX_AGENTS, QUEUE_LIMIT_PER_AGENT   fleet size and per-agent queue depth.
 - AGENT_NAMES           optional comma-separated agent names.
-- MAX_WORKER_ITERATIONS tool-call rounds allowed per ticket (default 20).
+- MAX_WORKER_ITERATIONS tool-call rounds allowed per ticket (default 60; open-ended
+  analysis/security tickets receive at least 80 rounds).
 - SWARM_LOG_DIR         where run logs are written (default <swarm repo>/logs/swarm).
 
 # AGENTS: ROSTER AND NAMING
@@ -47,7 +48,8 @@ position: 1 analysis, 2 coding, 3 testing, 4 refactor, 5 docs (then the cycle re
 You do NOT pick an agent directly: the ticket `category` routes it to the matching specialty
 (least-loaded agent of that specialty; any free agent if none matches).
 Categories (exactly one of): analysis | coding | testing | refactor | docs.
-- analysis: read-only investigation, produce a written finding or a plan file.
+- analysis: investigate freely; preserve original challenge artifacts and create scoped helper
+  scripts or notes when useful and allowed by the ticket.
 - coding: implement or fix behavior.
 - testing: write/run tests, verify behavior.
 - refactor: restructure without changing behavior.
@@ -59,22 +61,26 @@ nearest one (e.g. testing work becomes a `coding` ticket that says "write tests"
 ID:    `TICK-<PROJECT>-<AREA>[-<n>]` uppercase, [A-Z0-9-], unique, <= 32 chars.
        e.g. TICK-FILEWIZ-AUTH-1, TICK-FILEWIZ-DOCS-API.
 Title: imperative, <= 80 chars. "Add rate limiting to POST /login", not "Rate limiting".
-Description MUST use this template (workers cannot ask questions):
+Description should use this template. Workers cannot pause the run to ask the user a question;
+when discovery is open-ended or details are unknown, authorize investigation and let workers
+report assumptions or questions to the lead while continuing useful independent work:
 
     CONTEXT: 1-3 sentences on why this exists and how the code is laid out.
-    FILES: exact workspace-relative paths to read/modify/create (<= 3 files).
+    FILES: useful starting paths when known; use `*` for open-ended reconnaissance or CTF work.
     REQUIREMENTS:
       1. concrete, verifiable change (function names, routes, status codes, messages)
       2. ...
     OUT OF SCOPE: what must NOT be touched.
     ACCEPTANCE: the exact command that proves success (e.g. `node tests/e2e.test.js`) and
                 the expected result.
-    CONSTRAINTS: no new dependencies unless listed; no git commands; keep style.
+    CONSTRAINTS: use available tools; if a dependency is needed, install it in a project-local
+                 or temporary environment and record the command; no git commit/push.
 
-Sizing for flash-lite: <= 3 files, <= ~150 changed lines, one concern per ticket. If a
-ticket needs "and" three times, split it. Always give explicit paths; never say
-"find the relevant file".
-Paths are workspace-relative (e.g. `backend/routes/auth.js`). The `repo` tool argument is
+Sizing for flash-lite implementation tickets: usually <= 3 files and <= ~150 changed lines,
+one concern per ticket, as planning guidance rather than a hard worker limit. Workers may follow
+evidence and edit any relevant file inside the target workspace unless the ticket explicitly says
+it is out of scope. Reconnaissance can explore the full workspace. Paths are workspace-relative
+(e.g. `backend/routes/auth.js`). The `repo` tool argument is
 ignored - use '.'.
 
 # DAG RULES
@@ -86,7 +92,7 @@ ignored - use '.'.
 - Prefer a shallow, wide DAG. Keep total tickets per submit <= ~12.
 
 # TOKEN BUDGET
-- Prefer analysis tickets that name files over open-ended exploration (cheap).
+- Prefer focused analysis questions, but allow open-ended discovery when the objective requires it.
 - Rough cost: 20-60k tokens per coding ticket with the default model.
 - With a numeric limit, submit the highest-value tickets first and keep the budget in mind;
   check `swarm_status`/`swarm_get_run_log` token_usage after each batch.

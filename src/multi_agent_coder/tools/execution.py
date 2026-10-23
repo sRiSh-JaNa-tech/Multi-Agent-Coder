@@ -25,7 +25,7 @@ class CommandResult:
     timed_out: bool = False
 
 
-def truncate_output(text: str, max_chars: int = 4000) -> str:
+def truncate_output(text: str, max_chars: int = 16000) -> str:
     """Truncate long terminal output to head + tail to prevent context explosion."""
     if len(text) <= max_chars:
         return text
@@ -37,8 +37,8 @@ def truncate_output(text: str, max_chars: int = 4000) -> str:
 def run_sandboxed_command(
     cmd: list[str],
     cwd: Path,
-    timeout_seconds: float = 30.0,
-    max_output_chars: int = 4000,
+    timeout_seconds: float = 120.0,
+    max_output_chars: int = 16000,
 ) -> CommandResult:
     """
     Run a subprocess with stdin closed, secrets stripped from environment,
@@ -207,7 +207,7 @@ EXECUTION_TOOLS = [
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Command to run."},
-                "timeout": {"type": "integer", "description": "Timeout in seconds (default: 30).", "default": 30},
+                "timeout": {"type": "integer", "description": "Timeout in seconds (default: 120). Increase it for slow challenge tools or analysis engines.", "default": 120},
             },
             "required": ["command"],
         },
@@ -247,7 +247,7 @@ EXECUTION_TOOLS = [
 def execute_run_command(tool_input: dict[str, Any], workspace_root: Path | None = None) -> str:
     root = _get_target_root(tool_input, workspace_root)
     cmd_str = tool_input.get("command", "")
-    timeout = float(tool_input.get("timeout", 30))
+    timeout = float(tool_input.get("timeout", 120))
 
     if not cmd_str:
         return "Error: 'command' parameter is required."

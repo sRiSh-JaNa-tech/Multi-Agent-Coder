@@ -28,6 +28,16 @@ When the user asks you to implement complex features, refactor codebases, or coo
 
 ## 2. Execution Modes
 
+### REA Reverse Engineering Support
+
+REA is registered as the `rea` MCP server for Codex, and its reverse-engineering tools are also exposed to swarm workers as `rea_list_tools` and `rea_call_tool`. The matching skill is installed in the user skill directory. Restart Codex to load its MCP server and skill; workers start their own REA MCP session when they use the bridge tools.
+
+For a challenge, let REA and the workers inspect supplied artifacts, follow promising evidence, and create helper scripts or notes inside the challenge workspace when useful. Preserve the original challenge files. Convert findings into tickets when coordination helps; workers may investigate independently and verify one another's claims without waiting for the lead to relay every REA result.
+
+Workers can discover REA's current tools with `rea_list_tools(query, include_schemas)`. Use a focused query such as `binary`, `APK`, or `packet` with `include_schemas=true` to retrieve the matching input schemas, then call the selected operation with `rea_call_tool(tool_name, arguments)`. The lead may pass prior findings into tickets to avoid duplicate work, while workers can independently verify them or continue the investigation. The bridge launches the configured REA MCP command (default `npx -y rea-agents@6.7.0 mcp`); set `REA_MCP_COMMAND`, `REA_MCP_ARGS` (JSON string array), or `REA_MCP_VERSION` to select another installed command or version.
+
+On Linux, several REA workflows require a procps-compatible `ps` on `PATH`. Native binary analysis also needs a configured provider such as Ghidra, Hopper, or IDA. Treat unavailable providers as a capability limit and use the tools available for the challenge.
+
 You have two primary ways to dispatch tasks to the swarm:
 
 ### Method A: Native MCP Server Tools

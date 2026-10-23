@@ -76,11 +76,11 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _max_iterations() -> int:
-    raw = first_env("MAX_WORKER_ITERATIONS", default="20") or "20"
+    raw = first_env("MAX_WORKER_ITERATIONS", default="60") or "60"
     try:
         return max(1, int(raw))
     except ValueError:
-        return 20
+        return 60
 
 
 def _calculate_max_iterations(ticket: Any = None) -> int:
@@ -91,6 +91,8 @@ def _calculate_max_iterations(ticket: Any = None) -> int:
     cat = (getattr(ticket, "category", "") or "").lower()
     target_files = getattr(ticket, "target_files", []) or []
     depends_on = getattr(ticket, "depends_on", []) or []
+    if cat in ("analysis", "security"):
+        return max(base, 80)
     if cat in ("refactor", "coding") or len(target_files) > 1 or len(depends_on) > 1:
         return max(base, 40)
     elif cat in ("testing", "qa"):
@@ -167,6 +169,7 @@ class AgentWorker:
         run_store: Any | None = None,
         run_id: str | None = None,
         file_io_worker: Any | None = None,
+        tool_registry: Any | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.role = role
@@ -176,6 +179,14 @@ class AgentWorker:
         self.run_store = run_store
         self.run_id = run_id
         self.file_io_worker = file_io_worker
+        if tool_registry is not None:
+            self.tool_registry = tool_registry
+        else:
+            try:
+                from ..tools.registry import get_default_registry
+                self.tool_registry = get_default_registry()
+            except ImportError:
+                self.tool_registry = None
         self.model = model or first_env("MODEL_NAME", "GEMINI_MODEL") or DEFAULT_MODEL
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd()
@@ -244,26 +255,31 @@ class AgentWorker:
         return True
 
     def _build_worker_tools(self) -> list[dict[str, Any]]:
-        """Declare all cmd, git, coding, search, outline, and memory tools for the sub-agent."""
-        try:
-            from tools import (
-                EXECUTION_TOOLS,
-                FILE_TOOLS,
-                CODING_TOOLS,
-                SEARCH_TOOLS,
-                OUTLINE_TOOLS,
-                MEMORY_TOOLS,
-            )
-        except ImportError:
-            from multi_agent_coder.tools import (
-                EXECUTION_TOOLS,
-                FILE_TOOLS,
-                CODING_TOOLS,
-                SEARCH_TOOLS,
-                OUTLINE_TOOLS,
-                MEMORY_TOOLS,
-            )
-        declarations = EXECUTION_TOOLS + FILE_TOOLS + CODING_TOOLS + SEARCH_TOOLS + OUTLINE_TOOLS + MEMORY_TOOLS
+        """Declare all cmd, git, coding, search, outline, memory, and custom tools for the sub-agent."""
+        declarations: list[dict[str, Any]] = []
+        if getattr(self, "tool_registry", None):
+            declarations = self.tool_registry.get_schemas(self.security_context)
+        else:
+            try:
+                from tools import (
+                    EXECUTION_TOOLS,
+                    FILE_TOOLS,
+                    CODING_TOOLS,
+                    SEARCH_TOOLS,
+                    OUTLINE_TOOLS,
+                    MEMORY_TOOLS,
+                )
+            except ImportError:
+                from multi_agent_coder.tools import (
+                    EXECUTION_TOOLS,
+                    FILE_TOOLS,
+                    CODING_TOOLS,
+                    SEARCH_TOOLS,
+                    OUTLINE_TOOLS,
+                    MEMORY_TOOLS,
+                )
+            declarations = EXECUTION_TOOLS + FILE_TOOLS + CODING_TOOLS + SEARCH_TOOLS + OUTLINE_TOOLS + MEMORY_TOOLS
+
         if not self.allow_git_write:
             declarations = [d for d in declarations if d.get("name") not in GIT_WRITE_TOOLS]
         return [{"function_declarations": declarations}]
@@ -276,18 +292,51 @@ class AgentWorker:
                 "the working tree; the Lead Brain reviews, commits and pushes."
             )
 
-        # Enforce scope control: prevent modifying files outside the ticket's permitted target_files
-        if name in MUTATING_TOOLS and self.current_ticket and self.current_ticket.target_files:
+        # Enforce scope control only if specific target_files are set without wildcard "*"
+        if (
+            name in MUTATING_TOOLS
+            and self.current_ticket
+            and self.current_ticket.target_files
+            and "*" not in self.current_ticket.target_files
+        ):
             file_arg = args.get("filepath") or args.get("path") or args.get("file")
             if file_arg:
-                norm_arg = Path(file_arg).as_posix().lower()
-                allowed = [Path(tf).as_posix().lower() for tf in self.current_ticket.target_files]
+                norm_arg = Path(file_arg).as_posix().lstrip("./").lower()
+                allowed = [Path(tf).as_posix().lstrip("./").lower() for tf in self.current_ticket.target_files]
                 if not any(norm_arg == tf or norm_arg.endswith("/" + tf) or tf.endswith("/" + norm_arg) for tf in allowed):
                     return (
                         f"Error: Modification of '{file_arg}' is forbidden because it is outside your assigned ticket scope "
                         f"({self.current_ticket.target_files}). Leave unrelated files untouched. If this modification is required, "
                         f"document it as a follow-up finding in your final report using: [Discovered Issue: <title>] File: {file_arg} Description: <reason>"
                     )
+
+        root = self.workspace_root
+        sec_ctx = getattr(self, "security_context", None)
+
+        # 1. Try unified ToolRegistry first (supports custom @tool plugins and built-ins)
+        if getattr(self, "tool_registry", None):
+            tool_def = self.tool_registry.get_tool(name)
+            if tool_def:
+                try:
+                    tool_res = self.tool_registry.execute(
+                        name,
+                        args,
+                        security_context=sec_ctx,
+                        workspace_root=root,
+                        file_io_worker=self.file_io_worker,
+                    )
+                    res = str(tool_res)
+                    if tool_def.mutating and self.current_ticket:
+                        if not res.lower().startswith("error"):
+                            file_arg = args.get("filepath") or args.get("file_path") or args.get("path") or args.get("file") or args.get("target_file")
+                            if file_arg:
+                                norm = Path(file_arg).as_posix()
+                                if norm not in self.current_ticket.actual_files_modified:
+                                    self.current_ticket.actual_files_modified.append(norm)
+                    return res
+                except Exception as exc:
+                    logger.exception("Error executing tool '%s' via registry", name)
+                    return f"Tool Execution Error ({name}): {exc}"
 
         try:
             from tools import (
@@ -545,21 +594,13 @@ class AgentWorker:
                     )
                 )
 
-            # Forced landing notification when nearing iteration limit
+            # Give a final reminder without cutting off useful exploration prematurely.
             remaining = max_iterations - (iteration_idx + 1)
-            if remaining in (2, 3):
+            if remaining == 1:
                 forced_landing_notice = (
-                    f"\n\n[CRITICAL WARNING: FORCED LANDING PROTOCOL INITIATED]\n"
-                    f"You have used {iteration_idx + 1} of {max_iterations} allowed iterations ({remaining} remaining).\n"
-                    f"DO NOT initiate any new file edits or directory searches. "
-                    f"Run final syntax/test checks if needed, and immediately output your final resolution report "
-                    f"with [Agent Status: RESOLVED] (or FAILED if incomplete) to conclude the ticket."
-                )
-                tool_responses.append(types.Part(text=forced_landing_notice))
-            elif remaining == 1:
-                forced_landing_notice = (
-                    f"\n\n[FINAL ITERATION WARNING]\n"
-                    f"This is your FINAL allowed iteration. Output your complete [Agent Status: RESOLVED] report NOW."
+                    f"\n\n[FINAL ITERATION REMINDER]\n"
+                    f"This is your final allowed tool round. Finish the highest-value remaining check or "
+                    f"investigation step, then report what you established and what remains incomplete."
                 )
                 tool_responses.append(types.Part(text=forced_landing_notice))
 

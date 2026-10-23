@@ -106,7 +106,7 @@ class IndependentVerifier:
 
         # 1. Scope Boundary Check
         scope_violations: list[str] = []
-        if ticket.target_files:
+        if ticket.target_files and "*" not in ticket.target_files:
             norm_targets = {Path(t).as_posix().lstrip("./").lower() for t in ticket.target_files}
             baseline_mod = {Path(b).as_posix().lstrip("./").lower() for b in (self.baseline.pre_existing_git_changes if self.baseline else [])}
 
@@ -129,6 +129,8 @@ class IndependentVerifier:
         for f in modified_files:
             ext = Path(f).suffix.lower()
             if ext in self.SUPPORTED_SYNTAX_EXTS:
+                if not (self.workspace_root / f).exists():
+                    continue
                 res = execute_check_syntax({"filepath": f}, workspace_root=self.workspace_root)
                 if "SyntaxError" in res or res.strip().startswith("Error"):
                     syntax_errors.append(f"{f}: {res.strip()}")

@@ -22,8 +22,17 @@ from .execution import (
     execute_git_log,
 )
 from .outline import OUTLINE_TOOLS, execute_get_file_outline
+from .registry import ToolRegistry, ToolDefinition, get_default_registry, load_custom_tools
+from .decorator import tool, generate_tool_schema
 
 __all__ = [
+    # Extensible tooling
+    "tool",
+    "generate_tool_schema",
+    "ToolRegistry",
+    "ToolDefinition",
+    "get_default_registry",
+    "load_custom_tools",
     # Tool definitions
     "FILE_TOOLS",
     "MEMORY_TOOLS",
